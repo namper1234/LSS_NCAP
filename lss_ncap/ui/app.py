@@ -1,0 +1,647 @@
+"""Interactive Tk application. No vehicle equations or drawing logic live here."""
+from __future__ import annotations
+
+import logging
+import tkinter as tk
+import time
+from collections.abc import Callable
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+from ..config import ROAD, SIMULATION, RoadConfig, SimulationConfig
+from ..export import export_run, export_swa_profile
+from ..lookahead_tuning import TuningRequest
+from ..runtime import resource_path, user_export_dir
+from ..scenarios.elk import (ELK_SCENARIOS, ElkScenario, LaneChangeIntent,
+                             TargetMotion, elk_definition)
+from ..simulation import SimulationEngine, SimulationRun
+from ..visualization.chart import (LateralVelocityChartRenderer,
+                                   LateralTrajectoryChartRenderer,
+                                   SteeringAngleChartRenderer)
+from ..visualization.road import RoadRenderer
+from .playback import PlaybackClock, PlaybackState
+from .chart_interaction import ChartInteractionController, ChartView
+from .telemetry import telemetry_view
+from .theme import ThemeMode, apply_theme
+from .vehicle_configuration import VehicleConfiguration
+from .vehicle_panel import VehicleParametersPanel
+from .widgets import DropdownSelect, ExpandButton, ModernButton
+
+LOGGER = logging.getLogger(__name__)
+
+
+class SimulationApp:
+    def __init__(self, initial_vlat: float = 0.4, initial_side: int = 1,
+                 *, engine: SimulationEngine | None = None,
+                 road_config: RoadConfig = ROAD,
+                 simulation_config: SimulationConfig = SIMULATION,
+                 root: tk.Tk | None = None) -> None:
+        self.engine = engine or SimulationEngine(simulation_config)
+        self.road_config = road_config
+        self.simulation_config = self.engine.config
+        self.standard_radius_m = self.engine.config.path_radius_m
+        self.standard_radius_label = f"Standard · R {self.standard_radius_m:g} m"
+        self.run_data: SimulationRun = self.engine.run_lka(initial_vlat, initial_side)
+        self.playback = PlaybackState(len(self.run_data.samples))
+        self.root = root or tk.Tk()
+        self.root.title("LSS Euro NCAP")
+        self._window_icon = tk.PhotoImage(
+            file=str(resource_path("assets", "top_down_blue_car.png")))
+        self.root.iconphoto(True, self._window_icon)
+        self.root.geometry("1280x990")
+        self.root.minsize(980, 700)
+        self.root.resizable(True, True)
+        self.theme_mode = ThemeMode.DARK
+        self.palette = apply_theme(self.root, self.theme_mode)
+        self.chart_views = [ChartView() for _ in range(3)]
+        self.road_renderer = RoadRenderer(road_config, self.engine.vehicle,
+                                          self.engine.config, self.palette)
+        self.steering_chart_renderer = SteeringAngleChartRenderer(
+            self.palette, self.chart_views[0])
+        self.trajectory_chart_renderer = LateralTrajectoryChartRenderer(
+            self.palette, self.chart_views[1])
+        self.velocity_chart_renderer = LateralVelocityChartRenderer(
+            self.palette, self.chart_views[2])
+        self._timer: str | None = None
+        self.playback_clock = PlaybackClock()
+        self._syncing_timeline = False
+        self.vlat_var = tk.StringVar(self.root, value=f"{initial_vlat:.1f}")
+        self.mode_var = tk.StringVar(self.root, value="LKA")
+        self.elk_scenario_var = tk.StringVar(self.root, value="Road Edge")
+        self.intent_var = tk.StringVar(self.root, value="Unintentional")
+        self.target_speed_var = tk.StringVar(self.root, value="72 km/h")
+        self.side_var = tk.StringVar(self.root, value="Left" if initial_side == 1 else "Right")
+        self.line_var = tk.StringVar(self.root, value="Dashed")
+        self.lane_width_var = tk.StringVar(self.root,
+                                           value=f"{road_config.default_lane_width_m:.1f}")
+        self.lka_radius_var = tk.StringVar(self.root, value=self.standard_radius_label)
+        self.wheelbase_var = tk.StringVar(self.root,
+                                          value=f"{self.engine.vehicle.wheelbase_m:g}")
+        self.steer_ratio_var = tk.StringVar(self.root,
+                                            value=f"{self.engine.vehicle.steer_ratio:g}")
+        self.length_var = tk.StringVar(self.root,
+                                       value=f"{self.engine.vehicle.body_length_m:g}")
+        self.width_var = tk.StringVar(self.root,
+                                      value=f"{self.engine.vehicle.body_width_m:g}")
+        self.timeline_var = tk.DoubleVar(self.root, value=0)
+        self.status_var = tk.StringVar(self.root)
+        self.steering_info_var = tk.StringVar(self.root)
+        self.scenario_help_var = tk.StringVar(self.root)
+        self.telemetry_phase_var = tk.StringVar(self.root)
+        self.collision_status_var = tk.StringVar(self.root)
+        self.telemetry_state_var = tk.StringVar(self.root)
+        self.telemetry_steering_var = tk.StringVar(self.root)
+        self.telemetry_motion_var = tk.StringVar(self.root)
+        self.telemetry_target_var = tk.StringVar(self.root)
+        self.modern_buttons: list[ModernButton] = []
+        self.modern_selectors: list[DropdownSelect] = []
+        self._expanded_panel: str | None = None
+        self._expand_buttons: dict[str, ExpandButton] = {}
+        self._build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.bind("<space>", self._keyboard_playback)
+        self.root.bind("<Left>", lambda _event: self._step_frame(-1))
+        self.root.bind("<Right>", lambda _event: self._step_frame(1))
+        self.root.bind("<Home>", lambda _event: self._jump_to_frame(0))
+        self.root.bind("<End>", lambda _event: self._jump_to_frame(
+            self.playback.frame_count - 1))
+        self.root.bind("<Escape>", self._restore_on_escape)
+        self.root.after(100, self.redraw)
+
+    def _build_ui(self) -> None:
+        controls = ttk.Frame(self.root, padding=(18, 10), style="Card.TFrame")
+        self.controls_panel = controls
+        controls.pack(fill="x", padx=12, pady=(10, 8))
+        settings = ttk.Frame(controls, style="Panel.TFrame")
+        settings.pack(fill="x")
+        settings_top = ttk.Frame(settings, style="Panel.TFrame")
+        settings_top.pack(fill="x")
+        settings_bottom = ttk.Frame(settings, style="Panel.TFrame")
+        settings_bottom.pack(fill="x", pady=(8, 0))
+        settings_third = ttk.Frame(settings, style="Panel.TFrame")
+        settings_third.pack(fill="x", pady=(8, 0))
+        actions = ttk.Frame(controls, style="Panel.TFrame")
+        self.mode_combo = self._combo(settings_top, "Function", self.mode_var,
+                                      ("LKA", "ELK"), 6)
+        self.scenario_combo = self._combo(
+            settings_top, "Scenario", self.elk_scenario_var,
+            tuple(definition.label for definition in ELK_SCENARIOS.values()), 20)
+        self.vlat_combo = self._combo(
+            settings_bottom, "Lateral speed (m/s)", self.vlat_var,
+            tuple(f"{value:.1f}" for value in sorted(self._speed_options())), 5)
+        self.side_combo = self._combo(settings_bottom, "Departure", self.side_var,
+                                      ("Left", "Right"), 7)
+        self.intent_combo = self._combo(settings_bottom, "Lane change", self.intent_var,
+                                        ("Unintentional", "Intentional"), 13)
+        self.target_speed_combo = self._combo(settings_bottom, "GVT speed", self.target_speed_var,
+                                              ("72 km/h", "80 km/h"), 9)
+        self.line_combo = self._combo(settings_third, "Lane line", self.line_var,
+                                      ("Dashed", "Solid"), 7)
+        self.radius_combo = self._combo(
+            settings_third, "NCAP path", self.lka_radius_var,
+            (self.standard_radius_label, "Tight curve · R 800 m"), 22)
+        width_combo = self._combo(settings_third, "Lane width (m)", self.lane_width_var,
+                                  tuple(f"{value:.1f}" for value in
+                                        self.road_config.lane_width_options_m), 5)
+        self.mode_combo.bind("<<ComboboxSelected>>", self._scenario_selection_changed)
+        self.scenario_combo.bind("<<ComboboxSelected>>", self._scenario_selection_changed)
+        self.intent_combo.bind("<<ComboboxSelected>>", self._scenario_selection_changed)
+        self.target_speed_combo.bind("<<ComboboxSelected>>", self._scenario_selection_changed)
+        self.vlat_combo.bind("<<ComboboxSelected>>", lambda _event: self.regenerate())
+        self.side_combo.bind("<<ComboboxSelected>>", lambda _event: self.regenerate())
+        self.line_combo.bind("<<ComboboxSelected>>", lambda _event: self.redraw())
+        self.radius_combo.bind("<<ComboboxSelected>>", lambda _event: self.regenerate())
+        width_combo.bind("<<ComboboxSelected>>", lambda _event: self.redraw())
+        self._build_vehicle_parameters(controls)
+        actions.pack(fill="x", pady=(9, 0))
+        self.play_button = self._modern_button(
+            actions, "▶  Play", self.toggle_playback, accent=True)
+        self.play_button.pack(side="left", padx=(0, 7))
+        self._modern_button(actions, "↻  Reset / Generate", self.regenerate).pack(
+            side="left", padx=4)
+        self._modern_button(actions, "⇩  Export CSV", self.export_csv).pack(
+            side="left", padx=4)
+        self._modern_button(actions, "⇩  Export SWA", self.export_swa).pack(
+            side="left", padx=4)
+        self._modern_button(actions, "⌖  Reset View", self.reset_chart_views).pack(
+            side="left", padx=4)
+        ttk.Label(actions, textvariable=self.scenario_help_var,
+                  style="Panel.TLabel").pack(side="left", padx=(18, 0))
+        self.theme_button = self._modern_button(
+            actions, "☀  Light mode", self.toggle_theme)
+        self.theme_button.pack(side="right", padx=(12, 0))
+        self.steering_info_label = ttk.Label(
+            self.root, textvariable=self.steering_info_var, padding=(16, 5),
+            style="Muted.TLabel")
+        self.steering_info_label.pack(fill="x")
+
+        road_panel = ttk.Frame(self.root, padding=1, style="Card.TFrame")
+        self.road_panel = road_panel
+        road_panel.pack(fill="both", expand=True, padx=12)
+        telemetry = ttk.Frame(road_panel, padding=(14, 9), style="Panel.TFrame")
+        telemetry.pack(fill="x")
+        telemetry.columnconfigure(0, weight=2)
+        telemetry.columnconfigure(1, weight=2)
+        telemetry.columnconfigure(2, weight=1)
+        phase_header = ttk.Frame(telemetry, style="Panel.TFrame")
+        phase_header.grid(row=0, column=0, sticky="w")
+        ttk.Label(phase_header, textvariable=self.collision_status_var,
+                  style="Collision.TLabel").pack(side="left", padx=(0, 12))
+        ttk.Label(phase_header, textvariable=self.telemetry_phase_var,
+                  style="TelemetryTitle.TLabel").pack(side="left")
+        ttk.Label(telemetry, textvariable=self.telemetry_state_var,
+                  style="TelemetryValue.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(telemetry, textvariable=self.telemetry_steering_var,
+                  style="TelemetrySteering.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(telemetry, textvariable=self.telemetry_motion_var,
+                  style="TelemetryMotion.TLabel").grid(row=1, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(telemetry, textvariable=self.telemetry_target_var,
+                  style="TelemetryValue.TLabel", justify="right").grid(
+                      row=0, column=2, rowspan=2, sticky="e")
+        self.road_canvas = tk.Canvas(road_panel, bg=self.palette.background,
+                                     highlightthickness=0)
+        self.road_canvas.pack(fill="both", expand=True)
+        self._expand_button(self.road_canvas, "road")
+
+        charts = ttk.Frame(self.root, style="Dashboard.TFrame")
+        self.charts_panel = charts
+        charts.pack(fill="x", padx=12, pady=(8, 0))
+        charts.rowconfigure(0, weight=1)
+        charts.columnconfigure(0, weight=1, uniform="chart")
+        charts.columnconfigure(1, weight=1, uniform="chart")
+        charts.columnconfigure(2, weight=1, uniform="chart")
+        steering_panel = ttk.Frame(charts, padding=1, style="Card.TFrame")
+        trajectory_panel = ttk.Frame(charts, padding=1, style="Card.TFrame")
+        velocity_panel = ttk.Frame(charts, padding=1, style="Card.TFrame")
+        self.chart_panels = {
+            "steering": steering_panel,
+            "trajectory": trajectory_panel,
+            "velocity": velocity_panel,
+        }
+        steering_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        trajectory_panel.grid(row=0, column=1, sticky="nsew", padx=4)
+        velocity_panel.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
+        self.steering_chart_canvas = tk.Canvas(
+            steering_panel, height=210, bg=self.palette.panel, highlightthickness=0)
+        self.trajectory_chart_canvas = tk.Canvas(
+            trajectory_panel, height=210, bg=self.palette.panel, highlightthickness=0)
+        self.velocity_chart_canvas = tk.Canvas(
+            velocity_panel, height=210, bg=self.palette.panel, highlightthickness=0)
+        self.steering_chart_canvas.pack(fill="both", expand=True)
+        self.trajectory_chart_canvas.pack(fill="both", expand=True)
+        self.velocity_chart_canvas.pack(fill="both", expand=True)
+        for key, canvas in (
+            ("steering", self.steering_chart_canvas),
+            ("trajectory", self.trajectory_chart_canvas),
+            ("velocity", self.velocity_chart_canvas),
+        ):
+            self._expand_button(canvas, key)
+        self._normal_chart_grid = {
+            key: panel.grid_info() for key, panel in self.chart_panels.items()
+        }
+        self.status_label = ttk.Label(self.root, textvariable=self.status_var,
+                                      padding=(15, 7), style="Muted.TLabel")
+        self.status_label.pack(fill="x")
+        timeline_panel = ttk.Frame(self.root, padding=(12, 5), style="Card.TFrame")
+        self.timeline_panel = timeline_panel
+        timeline_panel.pack(side="bottom", fill="x", padx=12, pady=(0, 10))
+        self.timeline = ttk.Scale(timeline_panel, from_=0,
+                                  to=len(self.run_data.samples) - 1,
+                                  variable=self.timeline_var, orient="horizontal",
+                                  style="Dashboard.Horizontal.TScale",
+                                  command=self.scrub)
+        self.timeline.pack(fill="x")
+        self.road_canvas.bind("<Configure>", lambda _event: self.redraw())
+        self.steering_chart_canvas.bind("<Configure>", lambda _event: self.redraw())
+        self.velocity_chart_canvas.bind("<Configure>", lambda _event: self.redraw())
+        self.trajectory_chart_canvas.bind("<Configure>", lambda _event: self.redraw())
+        self.chart_interactions = [
+            ChartInteractionController(canvas, view, self.redraw_charts)
+            for canvas, view in zip((self.steering_chart_canvas,
+                                     self.trajectory_chart_canvas,
+                                     self.velocity_chart_canvas),
+                                    self.chart_views)
+        ]
+        self._refresh_scenario_controls(regenerate=False)
+        self._normal_root_pack = tuple(
+            (widget, widget.pack_info()) for widget in self.root.pack_slaves()
+        )
+
+    def _expand_button(self, canvas: tk.Canvas, key: str) -> None:
+        button = ExpandButton(canvas, lambda: self.toggle_panel_expansion(key),
+                              self.palette)
+        button.place(relx=1.0, x=-9, y=8, anchor="ne")
+        self._expand_buttons[key] = button
+
+    def toggle_panel_expansion(self, key: str) -> None:
+        """Expand one existing view in place, or restore the dashboard."""
+        if key != "road" and key not in self.chart_panels:
+            raise ValueError(f"Unknown panel: {key}")
+        self._expanded_panel = None if self._expanded_panel == key else key
+        for panel in self.chart_panels.values():
+            panel.grid_forget()
+        for chart_key, panel in self.chart_panels.items():
+            panel.grid(**self._normal_chart_grid[chart_key])
+        if self._expanded_panel in self.chart_panels:
+            for chart_key, panel in self.chart_panels.items():
+                if chart_key != self._expanded_panel:
+                    panel.grid_remove()
+            selected = self.chart_panels[self._expanded_panel]
+            selected.grid_configure(column=0, columnspan=len(self.chart_panels),
+                                    padx=0, sticky="nsew")
+
+        for widget, _options in self._normal_root_pack:
+            widget.pack_forget()
+        if self._expanded_panel is None:
+            for widget, options in self._normal_root_pack:
+                widget.pack(**options)
+        else:
+            selected = (self.road_panel if self._expanded_panel == "road"
+                        else self.charts_panel)
+            selected.pack(fill="both", expand=True, padx=12, pady=(10, 0))
+            timeline_options = next(options for widget, options in self._normal_root_pack
+                                    if widget is self.timeline_panel)
+            self.timeline_panel.pack(**timeline_options)
+        for button_key, button in self._expand_buttons.items():
+            button.set_expanded(button_key == self._expanded_panel)
+        self.redraw()
+
+    def _restore_on_escape(self, _event: tk.Event[tk.Misc]) -> str | None:
+        if self._expanded_panel is None:
+            return None
+        self.toggle_panel_expansion(self._expanded_panel)
+        return "break"
+
+    def reset_chart_views(self) -> None:
+        for view in self.chart_views:
+            view.reset()
+        self.redraw_charts()
+
+    def redraw_charts(self) -> None:
+        """Refresh only interactive plots for responsive zoom and panning."""
+        index = self.playback.index
+        self.steering_chart_renderer.draw(
+            self.steering_chart_canvas, self.run_data, index)
+        self.trajectory_chart_renderer.draw(
+            self.trajectory_chart_canvas, self.run_data, index)
+        self.velocity_chart_renderer.draw(
+            self.velocity_chart_canvas, self.run_data, index)
+
+    def toggle_theme(self) -> None:
+        """Switch palette without recreating widgets or simulation state."""
+        self.theme_mode = (ThemeMode.LIGHT if self.theme_mode == ThemeMode.DARK
+                           else ThemeMode.DARK)
+        self.palette = apply_theme(self.root, self.theme_mode)
+        self.road_renderer.set_palette(self.palette)
+        self.steering_chart_renderer.set_palette(self.palette)
+        self.velocity_chart_renderer.set_palette(self.palette)
+        self.trajectory_chart_renderer.set_palette(self.palette)
+        self.road_canvas.configure(bg=self.palette.background)
+        self.steering_chart_canvas.configure(bg=self.palette.panel)
+        self.velocity_chart_canvas.configure(bg=self.palette.panel)
+        self.trajectory_chart_canvas.configure(bg=self.palette.panel)
+        for button in self._expand_buttons.values():
+            button.set_palette(self.palette)
+        for button in self.modern_buttons:
+            button.set_palette(self.palette)
+        for selector in self.modern_selectors:
+            selector.set_palette(self.palette)
+        self.theme_button.set_text(
+            "☾  Dark mode" if self.theme_mode == ThemeMode.LIGHT else "☀  Light mode")
+        self.redraw()
+
+    def _modern_button(self, parent: tk.Misc, text: str,
+                       command: Callable[[], None], *, accent: bool = False,
+                       dashboard_surface: bool = False) -> ModernButton:
+        button = ModernButton(parent, text, command, self.palette,
+                              accent=accent,
+                              dashboard_surface=dashboard_surface)
+        self.modern_buttons.append(button)
+        return button
+
+    @staticmethod
+    def _speed_options() -> tuple[float, ...]:
+        from ..config import NCAP_PATH
+        return tuple(NCAP_PATH)
+
+    def _combo(self, parent: ttk.Frame, label: str, variable: tk.StringVar,
+               options: tuple[str, ...], width: int) -> DropdownSelect:
+        field = ttk.Frame(parent, style="Panel.TFrame")
+        field.pack(side="left", padx=(0, 16))
+        ttk.Label(field, text=label, style="Panel.TLabel").pack(side="left", padx=(0, 6))
+        combo = DropdownSelect(field, variable, options, self.palette, width)
+        combo.pack(side="left")
+        self.modern_selectors.append(combo)
+        return combo
+
+    def _build_vehicle_parameters(self, parent: ttk.Frame) -> None:
+        self.vehicle_panel = VehicleParametersPanel(parent, {
+            "wheelbase": self.wheelbase_var,
+            "length": self.length_var,
+            "width": self.width_var,
+            "steer_ratio": self.steer_ratio_var,
+        }, self.regenerate)
+        self.vehicle_panel.pack(fill="x", pady=(10, 0))
+
+    def _current_run_request(self) -> TuningRequest:
+        configuration = self._vehicle_configuration()
+        simulation_config = self.engine.config
+        vehicle_engine = configuration.build_engine(
+            SimulationEngine(simulation_config, self.engine.vehicle))
+        side = 1 if self.side_var.get() == "Left" else -1
+        if self.mode_var.get() == "LKA":
+            return TuningRequest(simulation_config, vehicle_engine.vehicle,
+                                 "LKA", float(self.vlat_var.get()), side,
+                                 radius_m=configuration.lka_radius_m)
+        scenario = self._elk_scenario_from_label(self.elk_scenario_var.get())
+        intent = (LaneChangeIntent.INTENTIONAL
+                  if self.intent_var.get() == "Intentional"
+                  else LaneChangeIntent.UNINTENTIONAL)
+        target_motion = None
+        if scenario == ElkScenario.OVERTAKING:
+            target_motion = (TargetMotion.OVERTAKING_80
+                             if self.target_speed_var.get() == "80 km/h"
+                             else TargetMotion.OVERTAKING_72)
+        return TuningRequest(simulation_config, vehicle_engine.vehicle,
+                             "ELK", float(self.vlat_var.get()), side,
+                             elk_scenario=scenario, intent=intent,
+                             target_motion=target_motion)
+
+    def _vehicle_configuration(self) -> VehicleConfiguration:
+        return VehicleConfiguration(
+            wheelbase_m=float(self.wheelbase_var.get()),
+            mass_kg=self.engine.vehicle.mass_kg,
+            steer_ratio=float(self.steer_ratio_var.get()),
+            body_length_m=float(self.length_var.get()),
+            body_width_m=float(self.width_var.get()),
+            lka_radius_m=(800.0 if self.lka_radius_var.get() == "Tight curve · R 800 m"
+                          else self.standard_radius_m),
+        )
+
+    def _stop_playback(self) -> None:
+        self.playback.playing = False
+        if self._timer is not None:
+            self.root.after_cancel(self._timer)
+            self._timer = None
+        self.play_button.set_text("▶  Play")
+
+    def _keyboard_playback(self, event: tk.Event[tk.Misc]) -> str | None:
+        if event.widget.winfo_class() in ("TCombobox", "Entry"):
+            return None
+        self.toggle_playback()
+        return "break"
+
+    def _jump_to_frame(self, index: int) -> str:
+        self._stop_playback()
+        self.playback.index = max(0, min(index, self.playback.frame_count - 1))
+        self.redraw()
+        return "break"
+
+    def _step_frame(self, direction: int) -> str:
+        return self._jump_to_frame(self.playback.index + direction)
+
+    @staticmethod
+    def _elk_scenario_from_label(label: str) -> ElkScenario:
+        return next(key for key, definition in ELK_SCENARIOS.items()
+                    if definition.label == label)
+
+    def _scenario_selection_changed(self, _event: object | None = None) -> None:
+        self._refresh_scenario_controls(regenerate=True)
+
+    def _refresh_scenario_controls(self, *, regenerate: bool) -> None:
+        if self.mode_var.get() == "LKA":
+            self._set_field_visible(self.scenario_combo, False)
+            self._set_field_visible(self.intent_combo, False)
+            self._set_field_visible(self.target_speed_combo, False)
+            self._set_field_visible(self.line_combo, True)
+            self._set_field_visible(self.radius_combo, True)
+            self.side_combo.configure(values=("Left", "Right"), state="readonly")
+            speed_values = tuple(f"{v:.1f}" for v in self._speed_options())
+            self.vlat_combo.configure(values=speed_values)
+            if self.vlat_var.get() not in speed_values:
+                self.vlat_var.set("0.4")
+            self.line_combo.configure(state="readonly")
+            self.scenario_help_var.set("Lane keeping · both departure sides")
+        else:
+            scenario = self._elk_scenario_from_label(self.elk_scenario_var.get())
+            overtaking = scenario == ElkScenario.OVERTAKING
+            self._set_field_visible(self.scenario_combo, True)
+            self._set_field_visible(self.intent_combo, overtaking)
+            self._set_field_visible(self.target_speed_combo, overtaking)
+            self._set_field_visible(self.line_combo, False)
+            self._set_field_visible(self.radius_combo, False)
+            self.scenario_combo.configure(state="readonly")
+            self.intent_combo.configure(state="readonly")
+            self.target_speed_combo.configure(state="readonly")
+            if not overtaking:
+                self.intent_var.set("Unintentional")
+            intent = (LaneChangeIntent.INTENTIONAL if self.intent_var.get() == "Intentional"
+                      else LaneChangeIntent.UNINTENTIONAL)
+            motion = (TargetMotion.OVERTAKING_80 if self.target_speed_var.get() == "80 km/h"
+                      else TargetMotion.OVERTAKING_72) if overtaking else None
+            definition = elk_definition(scenario, intent=intent, target_motion=motion)
+            side_values = tuple("Left" if side == 1 else "Right"
+                                for side in definition.allowed_sides)
+            self.side_combo.configure(values=side_values, state="readonly")
+            if self.side_var.get() not in side_values:
+                self.side_var.set(side_values[0])
+            speed_values = tuple(f"{value:.1f}" for value in definition.speed_options_mps)
+            self.vlat_combo.configure(values=speed_values)
+            if self.vlat_var.get() not in speed_values:
+                self.vlat_var.set(speed_values[0])
+            if scenario == ElkScenario.ROAD_EDGE:
+                self.line_var.set("Solid")
+            elif scenario in (ElkScenario.ONCOMING, ElkScenario.OVERTAKING):
+                self.line_var.set("Dashed")
+            else:
+                self.line_var.set("Solid")
+            side_text = " / ".join(side_values)
+            traffic = (f" · GVT {self.target_speed_var.get()}"
+                       if overtaking else " · GVT 72 km/h" if scenario == ElkScenario.ONCOMING
+                       else "")
+            self.scenario_help_var.set(
+                f"{definition.tested_boundary} · {side_text} departure{traffic}")
+        if regenerate:
+            self.regenerate()
+
+    @staticmethod
+    def _set_field_visible(combo: DropdownSelect, visible: bool) -> None:
+        """Show or hide a label/combobox pair without leaving an empty gap."""
+        field = combo.master
+        if visible:
+            if not field.winfo_manager():
+                field.pack(side="left", padx=(0, 16))
+        elif field.winfo_manager():
+            field.pack_forget()
+
+    def regenerate(self) -> None:
+        self._stop_playback()
+        try:
+            request = self._current_run_request()
+            candidate = request.run(request.config.lookahead_time_s)
+            candidate_engine = SimulationEngine(request.config, request.vehicle)
+        except (ValueError, ArithmeticError) as error:
+            LOGGER.exception("Could not generate LSS simulation")
+            messagebox.showerror("Simulation error", str(error), parent=self.root)
+            return
+        self.run_data = candidate
+        self.engine = candidate_engine
+        self.road_renderer.vehicle = candidate_engine.vehicle
+        for view in self.chart_views:
+            view.reset()
+        self.playback.reset(len(candidate.samples))
+        self._syncing_timeline = True
+        self.timeline.configure(to=len(candidate.samples) - 1)
+        self.timeline_var.set(0)
+        self._syncing_timeline = False
+        self.redraw()
+
+    def export_csv(self) -> None:
+        self._export_csv(profile_only=False)
+
+    def export_swa(self) -> None:
+        self._export_csv(profile_only=True)
+
+    def _export_csv(self, *, profile_only: bool) -> None:
+        filename = filedialog.asksaveasfilename(
+            parent=self.root, defaultextension=".csv",
+            initialdir=str(user_export_dir()),
+            initialfile=(f"{self.run_data.mode.lower()}_{self.run_data.scenario_key}_"
+                         f"{self.vlat_var.get()}_{self.side_var.get().lower()}"
+                         f"{'_swa' if profile_only else ''}.csv"),
+            filetypes=[("CSV files", "*.csv")],
+        )
+        if not filename:
+            return
+        try:
+            exporter = export_swa_profile if profile_only else export_run
+            exporter(Path(filename), self.run_data)
+        except (OSError, ValueError) as error:
+            LOGGER.exception("Could not export simulation to %s", filename)
+            messagebox.showerror("Export error", str(error), parent=self.root)
+            return
+        LOGGER.info("Exported %d samples to %s", len(self.run_data.samples), filename)
+        self.status_var.set(f"Saved {len(self.run_data.samples)} samples to {filename}")
+
+    def toggle_playback(self) -> None:
+        if self.playback.playing:
+            self._stop_playback()
+            return
+        if self.playback.index == self.playback.frame_count - 1:
+            self.playback.index = 0
+        self.playback.playing = True
+        self.playback_clock.start(self.playback.index, time.monotonic())
+        self.play_button.set_text("Ⅱ  Pause")
+        self._tick()
+
+    def _tick(self) -> None:
+        self._timer = None
+        if not self.playback.playing:
+            return
+        previous_index = self.playback.index
+        self.playback.index = self.playback_clock.index_at(
+            time.monotonic(), self.simulation_config.sample_period_s,
+            self.playback.frame_count)
+        more = self.playback.index < self.playback.frame_count - 1
+        if not more:
+            self.playback.playing = False
+        if self.playback.index != previous_index or not more:
+            self.redraw()
+        if more:
+            self._timer = self.root.after(16, self._tick)
+        else:
+            self._stop_playback()
+
+    def scrub(self, value: str) -> None:
+        if self._syncing_timeline:
+            return
+        self._stop_playback()
+        self.playback.scrub(float(value))
+        self.redraw(sync_timeline=False)
+
+    def redraw(self, sync_timeline: bool = True) -> None:
+        sample = self.run_data.samples[self.playback.index]
+        if sync_timeline:
+            self._syncing_timeline = True
+            self.timeline_var.set(self.playback.index)
+            self._syncing_timeline = False
+        run = self.run_data
+        telemetry = telemetry_view(run, self.playback.index)
+        self.collision_status_var.set(telemetry.collision_status)
+        self.telemetry_phase_var.set(telemetry.phase)
+        self.telemetry_state_var.set(telemetry.state)
+        self.telemetry_steering_var.set(telemetry.steering)
+        self.telemetry_motion_var.set(telemetry.motion)
+        self.telemetry_target_var.set(telemetry.target)
+        self.steering_info_var.set(
+            f"Pure Pursuit  ·  arc {run.reference_arc_start_s:.3f} s"
+            f"  ·  arc SWA {run.reference_arc_steering_deg:+.2f}°")
+        self.road_renderer.draw(self.road_canvas, self.run_data, self.playback.index,
+                                float(self.lane_width_var.get()), self.line_var.get())
+        self.redraw_charts()
+        path = self.run_data.path
+        self.status_var.set(
+            f"{run.mode} · {run.scenario_name} · {run.tested_boundary}"
+            f"   |   Lane {self.lane_width_var.get()} m · marking {self.road_config.marking_width_m:.2f} m"
+            f"   |   NCAP path ψ {path.psi_deg:.2f}° · d1 {path.d1_table:.2f} m · "
+            f"d2 {path.d2:.2f} m · tyre-line offset {path.arc_y + path.d2:.3f} m"
+        )
+        if run.target_samples:
+            initial_ego = run.samples[0]
+            initial_target = run.target_samples[0]
+            self.status_var.set(
+                self.status_var.get()
+                + f"   |   Initial VUT ({initial_ego.front_x_m:+.2f}, {initial_ego.front_y_m:+.2f}) m"
+                + f" · GVT ({initial_target.x_m:+.2f}, {initial_target.y_m:+.2f}) m"
+            )
+        if run.collision_detected and self.playback.index == len(run.samples) - 1:
+            self.status_var.set(
+                self.status_var.get()
+                + f"   |   Collision at {run.collision_time_s:.6f} s · scenario terminated")
+
+    def close(self) -> None:
+        self._stop_playback()
+        self.root.destroy()
+
+    def run(self) -> None:
+        self.root.mainloop()

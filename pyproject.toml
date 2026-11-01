@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lss-ncap-simulation"
+version = "0.1.0"
+description = "Euro NCAP LKA steering profile simulation and desktop viewer"
+requires-python = ">=3.10"
+dependencies = ["Pillow>=9.0"]
+
+[project.scripts]
+lss-ncap = "lss_ncap.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lss_ncap*"]
+
+[tool.setuptools.package-data]
+lss_ncap = ["assets/*.png"]

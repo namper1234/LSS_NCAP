@@ -27,8 +27,8 @@ def _rectangle(center_x: float, center_y: float, yaw_deg: float,
                  for sx, sy in ((1, 1), (1, -1), (-1, -1), (-1, 1)))
 
 
-def _ego_rectangle(sample: SimulationSample, vehicle: VehicleParams
-                   ) -> tuple[tuple[float, float], ...]:
+def ego_polygon(sample: SimulationSample, vehicle: VehicleParams
+                ) -> tuple[tuple[float, float], ...]:
     yaw = math.radians(sample.yaw_deg)
     return _rectangle(
         sample.front_x_m - vehicle.l_front_m * math.cos(yaw),
@@ -36,16 +36,62 @@ def _ego_rectangle(sample: SimulationSample, vehicle: VehicleParams
         sample.yaw_deg, vehicle.body_length_m, vehicle.body_width_m)
 
 
-def _target_rectangle(sample: TargetVehicleSample, vehicle: VehicleParams
-                      ) -> tuple[tuple[float, float], ...]:
+def target_polygon(sample: TargetVehicleSample, vehicle: VehicleParams
+                   ) -> tuple[tuple[float, float], ...]:
     return _rectangle(sample.x_m, sample.y_m, sample.yaw_deg,
                       vehicle.body_length_m, vehicle.body_width_m)
 
 
 def vehicles_intersect(ego: SimulationSample, target: TargetVehicleSample,
                        vehicle: VehicleParams) -> bool:
-    return rectangles_intersect(_ego_rectangle(ego, vehicle),
-                                _target_rectangle(target, vehicle))
+    return rectangles_intersect(ego_polygon(ego, vehicle),
+                                target_polygon(target, vehicle))
+
+
+def lateral_separation_m(ego: SimulationSample, target: TargetVehicleSample,
+                         vehicle: VehicleParams) -> float:
+    """Road-frame gap between vehicle polygons; zero means lateral overlap."""
+    ego_y = [point[1] for point in ego_polygon(ego, vehicle)]
+    target_y = [point[1] for point in target_polygon(target, vehicle)]
+    return max(0.0, min(target_y) - max(ego_y), min(ego_y) - max(target_y))
+
+
+def time_to_collision_s(ego: SimulationSample, target: TargetVehicleSample,
+                        vehicle: VehicleParams, ego_speed_mps: float) -> float | None:
+    """Constant-velocity TTC for the current oriented vehicle polygons."""
+    first, second = ego_polygon(ego, vehicle), target_polygon(target, vehicle)
+    ego_yaw, target_yaw = math.radians(ego.yaw_deg), math.radians(target.yaw_deg)
+    relative_velocity = (
+        target.speed_mps * math.cos(target_yaw) - ego_speed_mps * math.cos(ego_yaw),
+        target.speed_mps * math.sin(target_yaw) - ego_speed_mps * math.sin(ego_yaw),
+    )
+    entry, exit_time = -math.inf, math.inf
+    for polygon in (first, second):
+        for index in range(2):
+            x1, y1 = polygon[index]
+            x2, y2 = polygon[index + 1]
+            axis_x, axis_y = -(y2 - y1), x2 - x1
+            magnitude = math.hypot(axis_x, axis_y)
+            axis_x, axis_y = axis_x / magnitude, axis_y / magnitude
+            first_projection = [x * axis_x + y * axis_y for x, y in first]
+            second_projection = [x * axis_x + y * axis_y for x, y in second]
+            first_min, first_max = min(first_projection), max(first_projection)
+            second_min, second_max = min(second_projection), max(second_projection)
+            relative_speed = (relative_velocity[0] * axis_x
+                              + relative_velocity[1] * axis_y)
+            if abs(relative_speed) < 1e-12:
+                if second_max < first_min or first_max < second_min:
+                    return None
+                continue
+            first_time = (first_min - second_max) / relative_speed
+            second_time = (first_max - second_min) / relative_speed
+            axis_entry, axis_exit = sorted((first_time, second_time))
+            entry, exit_time = max(entry, axis_entry), min(exit_time, axis_exit)
+            if entry > exit_time:
+                return None
+    if exit_time < 0:
+        return None
+    return max(0.0, entry)
 
 
 def rectangles_intersect(first: tuple[tuple[float, float], ...],

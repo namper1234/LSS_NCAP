@@ -15,13 +15,12 @@ class VehicleConfiguration:
     steer_ratio: float
     body_length_m: float
     body_width_m: float
-    lka_radius_m: float
 
     def build_engine(self, base: SimulationEngine) -> SimulationEngine:
         values = (self.wheelbase_m, self.mass_kg, self.steer_ratio,
-                  self.body_length_m, self.body_width_m, self.lka_radius_m)
+                  self.body_length_m, self.body_width_m)
         if not all(math.isfinite(value) and value > 0 for value in values):
-            raise ValueError("Vehicle dimensions, mass, steering ratio, and radius must be positive")
+            raise ValueError("Vehicle dimensions, mass, and steering ratio must be positive")
         if self.body_length_m < self.wheelbase_m:
             raise ValueError("Vehicle length must be at least the wheelbase")
         front_fraction = base.vehicle.l_front_m / base.vehicle.wheelbase_m
@@ -31,4 +30,4 @@ class VehicleConfiguration:
                           mass_kg=self.mass_kg, steer_ratio=self.steer_ratio,
                           body_length_m=self.body_length_m,
                           body_width_m=self.body_width_m)
-        return SimulationEngine(base.config, vehicle)
+        return SimulationEngine(base.config, vehicle, base.road)

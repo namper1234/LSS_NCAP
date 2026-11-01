@@ -5,13 +5,44 @@ import math
 from dataclasses import dataclass
 
 
+NCAP_STANDARD = "standard"
+NCAP_ALTERNATIVE_DIM = "alternative_dim"
+
+# Euro NCAP LSS v4.2 §7.2.3. Each row is exactly
+# Vlat: (R [m], yaw [deg], d1 [m], d2 [m]).
+NCAP_STANDARD_TABLE: dict[float, tuple[float, float, float, float]] = {
+    0.2: (1200.0, 0.57, 0.06, 0.70),
+    0.3: (1200.0, 0.86, 0.14, 0.90),
+    0.4: (1200.0, 1.15, 0.24, 0.80),
+    0.5: (1200.0, 1.43, 0.38, 0.75),
+    0.6: (1200.0, 1.72, 0.54, 0.60),
+    0.7: (1200.0, 2.01, 0.74, 0.53),
+    0.8: (1200.0, 2.29, 0.96, 0.40),
+    0.9: (1200.0, 2.58, 1.22, 0.23),
+    1.0: (1200.0, 2.87, 1.50, 0.00),
+}
+
+NCAP_ALTERNATIVE_DIM_TABLE: dict[float, tuple[float, float, float, float]] = {
+    0.2: (1200.0, 0.57, 0.06, 0.70),
+    0.3: (1200.0, 0.86, 0.14, 0.90),
+    0.4: (1200.0, 1.15, 0.24, 0.80),
+    0.5: (800.0, 1.43, 0.25, 1.00),
+    0.6: (800.0, 1.72, 0.36, 1.20),
+    0.7: (800.0, 2.01, 0.49, 1.40),
+    0.8: (800.0, 2.29, 0.64, 1.60),
+    0.9: (800.0, 2.58, 0.81, 1.80),
+    1.0: (800.0, 2.87, 1.00, 2.00),
+}
+
+NCAP_PATH_TABLES = {
+    NCAP_STANDARD: NCAP_STANDARD_TABLE,
+    NCAP_ALTERNATIVE_DIM: NCAP_ALTERNATIVE_DIM_TABLE,
+}
+
+# Compatibility view used by ELK definitions and existing integrations.
 NCAP_PATH: dict[float, tuple[float, float, float]] = {
-    # Lateral target: (heading in degrees, published d1, d2), LSS v4.2 §7.2.3.
-    0.2: (0.57, 0.06, 0.70),
-    0.3: (0.86, 0.14, 0.90),
-    0.4: (1.15, 0.24, 0.80),
-    0.5: (1.43, 0.38, 0.75),
-    0.6: (1.72, 0.54, 0.60),
+    vlat: (yaw_deg, d1_m, d2_m)
+    for vlat, (_radius_m, yaw_deg, d1_m, d2_m) in NCAP_STANDARD_TABLE.items()
 }
 
 
@@ -58,6 +89,16 @@ class VehicleParams:
     @property
     def wheelbase_m(self) -> float:
         return self.l_front_m + self.l_rear_m
+
+    @property
+    def front_overhang_m(self) -> float:
+        """Body distance ahead of the front axle in the rectangle model."""
+        return self.body_length_m / 2 - self.l_front_m
+
+    @property
+    def rear_overhang_m(self) -> float:
+        """Body distance behind the rear axle in the rectangle model."""
+        return self.body_length_m / 2 - self.l_rear_m
 
     @property
     def understeer_gradient_s2_per_m(self) -> float:

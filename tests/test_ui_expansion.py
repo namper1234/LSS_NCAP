@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tkinter as tk
 import unittest
+from tkinter import ttk
 
 from lss_ncap.ui.app import SimulationApp
 
@@ -25,11 +26,43 @@ class PanelExpansionTests(unittest.TestCase):
             self.assertFalse(hasattr(app, "apply_tuning_button"))
             self.assertEqual(app.run_data.config.lookahead_min_m, 8.0)
             self.assertEqual(app.run_data.config.lookahead_time_s, 1.1)
+            self.assertEqual(app.approach_s_var.get(), "5")
+            self.assertEqual(app.run_data.config.approach_s, 5.0)
+            self.assertEqual(app.lka_profile_var.get(), app.standard_profile_label)
+            self.assertEqual(app.run_data.path.radius_m, 1200.0)
             self.assertEqual(app.run_data.pursuit_controller.lookahead_m, 22.0)
-            self.assertNotIn("look-ahead", app.steering_info_var.get().lower())
+            self.assertFalse(hasattr(app, "steering_info_label"))
+            self.assertFalse(hasattr(app, "steering_info_var"))
+            expected_titles = {
+                "steering": "STEERING WHEEL ANGLE (SWA) [°]",
+                "trajectory": "LATERAL TRAJECTORY [m]",
+                "velocity": "LATERAL VELOCITY [m/s]",
+            }
+            for key, panel in app.chart_panels.items():
+                toolbar = next(child for child in panel.winfo_children()
+                               if isinstance(child, ttk.Frame))
+                labels = [child for child in toolbar.winfo_children()
+                          if isinstance(child, ttk.Label)]
+                self.assertEqual(len(labels), 1)
+                self.assertEqual(labels[0].cget("text"), expected_titles[key])
             app.regenerate()
             self.assertEqual(app.run_data.config.lookahead_min_m, 8.0)
             self.assertEqual(app.run_data.config.lookahead_time_s, 1.1)
+            app.approach_s_var.set("3.25")
+            app.regenerate()
+            self.assertEqual(app.run_data.config.approach_s, 3.25)
+            self.assertEqual(app.engine.config.approach_s, 3.25)
+            self.assertEqual(app.run_data.reference_arc_start_s, 3.25)
+            self.assertAlmostEqual(
+                app.run_data.path.s0,
+                app.run_data.config.speed_mps * app.run_data.config.approach_s)
+            app.lka_profile_var.set(app.alternative_profile_label)
+            app.vlat_var.set("0.6")
+            app.regenerate()
+            self.assertEqual(
+                (app.run_data.path.radius_m, app.run_data.path.psi_deg,
+                 app.run_data.path.d1_table, app.run_data.path.d2),
+                (800.0, 1.72, 0.36, 1.20))
         finally:
             if app is not None:
                 app.close()

@@ -5,7 +5,7 @@ import math
 import unittest
 from dataclasses import replace
 
-from lss_ncap.config import SIMULATION, VEHICLE
+from lss_ncap.config import NCAP_ALTERNATIVE_DIM, NCAP_STANDARD, SIMULATION, VEHICLE
 from lss_ncap.dynamics import KinematicBicycleModel
 from lss_ncap.scenarios.lka import NcapPath
 from lss_ncap.simulation import SimulationEngine, VehicleState
@@ -60,11 +60,11 @@ class PurePursuitTests(unittest.TestCase):
         for lookahead_time_s in (0.5, 1.1, 1.5):
             engine = SimulationEngine(replace(
                 SIMULATION, lookahead_time_s=lookahead_time_s))
-            for radius_m in (800.0, 1200.0):
+            for profile in (NCAP_STANDARD, NCAP_ALTERNATIVE_DIM):
                 for side in (-1, 1):
                     with self.subTest(lookahead_time_s=lookahead_time_s,
-                                      radius_m=radius_m, side=side):
-                        run = engine.run_lka(side=side, radius_m=radius_m)
+                                      profile=profile, side=side):
+                        run = engine.run_lka(0.5, side=side, profile=profile)
                         approach = [sample for sample in run.samples
                                     if sample.time_s < run.reference_arc_start_s]
                         self.assertTrue(any(sample.steering_command_deg * side > 0

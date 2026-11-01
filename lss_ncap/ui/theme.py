@@ -41,11 +41,11 @@ PALETTES = {
         cyan="#22d3ee", green="#42d392", orange="#ff8a4c",
         yellow="#ffd166", magenta="#f05bd8"),
     ThemeMode.LIGHT: UiPalette(
-        background="#f3f6f9", panel="#ffffff", panel_alt="#edf2f6",
-        foreground="#172531", muted="#5f7382", border="#d2dce4", grid="#dbe3e9",
-        accent="#2678d4", accent_hover="#438de0", accent_text="#315fba",
-        cyan="#007f92", green="#087f4f", orange="#c65318",
-        yellow="#936600", magenta="#a91b98"),
+        background="#e9eef3", panel="#ffffff", panel_alt="#e2eaf1",
+        foreground="#0b1f33", muted="#40566b", border="#aebdca", grid="#c5d0da",
+        accent="#006fbe", accent_hover="#005b9f", accent_text="#005a9e",
+        cyan="#006f91", green="#08783f", orange="#c4480b",
+        yellow="#855b00", magenta="#9c178c"),
 }
 
 BACKGROUND = PALETTES[ThemeMode.DARK].background
@@ -61,7 +61,8 @@ def palette_for(mode: ThemeMode | str) -> UiPalette:
 
 def apply_theme(root: tk.Tk, mode: ThemeMode | str = ThemeMode.DARK) -> UiPalette:
     """Apply a complete palette and return it for canvas-based components."""
-    palette = palette_for(mode)
+    selected_mode = ThemeMode(mode)
+    palette = palette_for(selected_mode)
     configure_typography(root)
     root.configure(bg=palette.background)
     style = ttk.Style(root)
@@ -94,7 +95,9 @@ def apply_theme(root: tk.Tk, mode: ThemeMode | str = ThemeMode.DARK) -> UiPalett
     style.configure("Muted.TLabel", background=palette.background,
                     foreground=palette.muted, font=ui_font(TYPE_SCALE.label))
     style.configure("Panel.TLabel", background=palette.panel,
-                    foreground=palette.muted, font=ui_font(TYPE_SCALE.label))
+                    foreground=(palette.foreground if selected_mode == ThemeMode.LIGHT
+                                else palette.muted),
+                    font=ui_font(TYPE_SCALE.label))
     style.configure("VehicleShell.TFrame", background=palette.panel,
                     bordercolor=palette.border, borderwidth=1, relief="solid")
     style.configure("VehiclePlain.TFrame", background=palette.panel)

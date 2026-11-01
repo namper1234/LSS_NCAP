@@ -6,7 +6,7 @@ import unittest
 from dataclasses import replace
 
 from lss_ncap.collision import vehicles_intersect
-from lss_ncap.config import VEHICLE
+from lss_ncap.config import NCAP_ALTERNATIVE_DIM, VEHICLE
 from lss_ncap.simulation import SimulationEngine, TargetVehicleSample
 from lss_ncap.ui.vehicle_configuration import VehicleConfiguration
 
@@ -22,7 +22,6 @@ class VehicleConfigurationTests(unittest.TestCase):
             steer_ratio=self.base.vehicle.steer_ratio,
             body_length_m=self.base.vehicle.body_length_m,
             body_width_m=self.base.vehicle.body_width_m,
-            lka_radius_m=1200.0,
         )
         values.update(changes)
         return VehicleConfiguration(**values)
@@ -40,7 +39,7 @@ class VehicleConfigurationTests(unittest.TestCase):
                                     steer_ratio=17, body_length_m=5.1,
                                     body_width_m=2.1)
         engine = config.build_engine(self.base)
-        run = engine.run_lka(radius_m=config.lka_radius_m)
+        run = engine.run_lka()
         self.assertAlmostEqual(run.vehicle.wheelbase_m, 3.1)
         self.assertAlmostEqual(run.vehicle.mass_kg, 2300)
         self.assertAlmostEqual(run.vehicle.steer_ratio, 17)
@@ -62,12 +61,13 @@ class VehicleConfigurationTests(unittest.TestCase):
                                3 * run.config.sample_period_s)
         self.assertGreater(run.samples[1].front_y_m, 0)
 
-    def test_800_m_scenario_preserves_standard_path(self) -> None:
-        standard = self.base.run_lka()
-        tight = self.base.run_lka(radius_m=800)
+    def test_alternative_profile_selects_its_800_m_table_row(self) -> None:
+        standard = self.base.run_lka(0.5)
+        tight = self.base.run_lka(0.5, profile=NCAP_ALTERNATIVE_DIM)
         self.assertEqual(standard.path.radius_m, 1200)
         self.assertEqual(tight.path.radius_m, 800)
-        self.assertEqual(tight.scenario_key, "lka_r800")
+        self.assertEqual(tight.scenario_key, "lka_alternative_dim")
+        self.assertEqual((tight.path.d1_table, tight.path.d2), (0.25, 1.0))
         self.assertNotEqual(standard.reference_arc_steering_deg,
                             tight.reference_arc_steering_deg)
         self.assertNotEqual(standard.samples[210].front_y_m,

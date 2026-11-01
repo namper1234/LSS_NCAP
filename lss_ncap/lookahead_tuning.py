@@ -5,7 +5,8 @@ import math
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from .config import SimulationConfig, VehicleParams
+from .config import (NCAP_PATH_TABLES, NCAP_STANDARD, ROAD, RoadConfig,
+                     SimulationConfig, VehicleParams)
 from .scenarios.elk import ElkScenario, LaneChangeIntent, TargetMotion
 from .simulation import SimulationEngine, SimulationRun
 
@@ -17,10 +18,13 @@ class TuningRequest:
     mode: str
     lateral_speed_mps: float
     side: int
+    path_profile: str = NCAP_STANDARD
     radius_m: float | None = None
     elk_scenario: ElkScenario | None = None
     intent: LaneChangeIntent = LaneChangeIntent.UNINTENTIONAL
     target_motion: TargetMotion | None = None
+    road: RoadConfig = ROAD
+    safe_termination: bool = True
 
     def __post_init__(self) -> None:
         if self.mode not in ("LKA", "ELK") or self.side not in (-1, 1):
@@ -29,6 +33,8 @@ class TuningRequest:
             raise ValueError("Target lateral speed must be finite and positive")
         if self.mode == "ELK" and self.elk_scenario is None:
             raise ValueError("An ELK scenario is required")
+        if self.mode == "LKA" and self.path_profile not in NCAP_PATH_TABLES:
+            raise ValueError("A valid Euro NCAP LKA path profile is required")
         if self.radius_m is not None and (not math.isfinite(self.radius_m)
                                           or self.radius_m <= 0):
             raise ValueError("Path radius must be finite and positive")
@@ -38,13 +44,14 @@ class TuningRequest:
             raise ValueError("Look-ahead time must be finite and positive")
         engine = SimulationEngine(replace(self.config,
                                           lookahead_time_s=lookahead_time_s),
-                                  self.vehicle)
+                                  self.vehicle, self.road)
         if self.mode == "LKA":
             return engine.run_lka(self.lateral_speed_mps, self.side,
-                                  radius_m=self.radius_m)
+                                  profile=self.path_profile, radius_m=self.radius_m)
         return engine.run_elk(self.elk_scenario, self.lateral_speed_mps,
                               self.side, intent=self.intent,
-                              target_motion=self.target_motion)
+                              target_motion=self.target_motion,
+                              safe_termination=self.safe_termination)
 
 
 @dataclass(frozen=True, slots=True)

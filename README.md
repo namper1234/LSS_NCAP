@@ -66,6 +66,7 @@ after both native build and smoke jobs pass.
 ```bash
 python3 lka_ncap_profile.py
 python3 lka_ncap_profile.py --headless --vlat 0.4 --side left --output profile.csv
+python3 lka_ncap_profile.py --headless --ncap-profile alternative_dim --vlat 0.8 --side right --output alternative.csv
 python3 lka_ncap_profile.py --headless --vlat 0.4 --swa-only --output swa_profile.csv
 python3 lka_ncap_profile.py --headless --mode elk --elk-scenario oncoming --vlat 0.4 --output elk_oncoming.csv
 python3 lka_ncap_profile.py --headless --mode elk --elk-scenario overtaking --intent intentional --target-speed 80 --vlat 0.6 --output elk_overtaking.csv
@@ -80,21 +81,27 @@ layout, markings, traffic target, charts, telemetry, and CSV output update with
 the selection.
 
 The remaining controls provide lateral-speed target, departure direction, lane-line style,
-and 3.5/3.7 m lane-width selectors. The road marking is 0.2 m wide at the
+3.5/3.7 m lane-width selectors, and an editable approach time. Changing the
+approach time regenerates the scenario and moves the scheduled NCAP arc start.
+The road marking is 0.2 m wide at the
 current display scale. Play, reset, full CSV export, compact SWA export, and bottom timeline scrubbing
-are available. The live card reports the steering-wheel command, road-frame lateral
-speed (`V_lat`), and vehicle heading (`ψ`). Scrubbing pauses playback; Play
-continues from the selected 25 ms sample.
+are available. The timeline readout always shows the selected time, steering
+command, NCAP reference, lateral speed, trajectory signals, and tracking error.
+The road telemetry card also shows the current values throughout playback and scrubbing.
+Scrubbing pauses playback; Play continues from the selected 25 ms sample.
 
 Steering-wheel angle, lateral velocity, and lateral trajectory tracking are
 shown in separate synchronized chart panels. The steering chart shows the
 command applied over each following 25 ms model interval and a separate NCAP
 reference. The
 trajectory chart overlays the scheduled NCAP reference lateral position and
-the simulated vehicle's front-axle lateral position, with the
-selected frame's tracking error shown in metres. The header's
+the simulated vehicle's front-axle lateral position. The selected frame's
+tracking error appears in the timeline readout. The header's
 Light/Dark Mode control changes the complete dashboard palette immediately and
 does not reset playback, the selected scenario, or the current timeline frame.
+Light mode uses a high-contrast white workspace, distinct control surfaces,
+dark axis text, stronger grid lines, and signal colors selected for readability
+against the plot background.
 Playback uses a monotonic wall clock, preventing animation drift when rendering
 is briefly delayed. Space toggles play/pause, the arrow keys step one exact
 25 ms sample, and Home/End jump to the beginning or final scenario frame.
@@ -115,13 +122,19 @@ platform-native comboboxes. Each selector opens a floating, theme-aware menu
 with generous row spacing, hover feedback, a current-value checkmark, keyboard
 activation, and the same dynamic enable/disable behavior used by LKA and ELK.
 
-Every chart has an independent interactive viewport. Scroll over a plot to zoom
-around the pointer, drag with the primary mouse button to pan, and use Reset
-View to restore all plots to their original time and value ranges. View changes
-affect presentation only; simulation samples and exported data are unchanged.
-Use **Expand** on the road view or any chart to fill the viewer with that panel;
-**Restore** or Escape returns to the dashboard. The timeline stays available
-while a panel is expanded.
+Every chart has an independent interactive viewport. Scroll over the plot to
+zoom around the pointer, drag with the primary mouse button to pan, and
+Shift-drag or right-drag to draw a zoom rectangle. Click a legend signal to
+hide or show only that signal; hidden entries are muted and crossed out. Plot
+hover does not reveal values. The bottom timeline slider is the sole signal
+inspector, and its vertical cursor marks the same selected time on all plots.
+Each chart has a visible **Reset View** button that auto-fits its axes while
+keeping signal visibility. The dashboard **Reset View** resets all three axes.
+View changes affect presentation only; simulation samples and exported data
+are unchanged. Use **Expand** on the road view or any chart to fill the viewer
+with that panel; **Restore** or Escape returns to the dashboard. Zoom, pan,
+and signal visibility remain intact across expansion and restoration. The
+timeline stays available while a panel is expanded.
 
 The ego vehicle uses a transparent blue top-down sprite, while oncoming and
 overtaking GVT traffic uses a separate dark-green sprite derived from the
@@ -174,16 +187,20 @@ and 17.86 respectively. Press Enter or leave a field to regenerate the run.
 Wheelbase sets the kinematic bicycle geometry; body length and width change
 rendering and collision geometry. Vehicle mass remains internal at 2485 kg by
 default; the kinematic bicycle equations do not depend on it.
-The LKA **NCAP path** selector adds a tight-curve scenario with an 800 m radius
-while retaining the standard 1200 m path and all existing ELK scenarios.
+The LKA **NCAP path** selector uses the complete Euro NCAP LSS v4.2 §7.2.3
+tables. **Standard NCAP** is the default and uses R = 1200 m from 0.2–1.0 m/s.
+**Alternative NCAP (DIM)** uses the second table: R = 1200 m at 0.2–0.4 m/s
+and R = 800 m at 0.5–1.0 m/s. Selecting a lateral velocity loads that row's
+exact yaw, d1, and d2 values automatically.
 Changing these settings updates the road view and all three plots. Internally,
 the controller uses `max(minimum distance, speed * look-ahead time)` with fixed
 viewer defaults of 8 m and 1.1 s (22 m at 72 km/h).
 
-The lateral-speed selection shapes the NCAP path. At each 25 ms sample, the
+The lateral-speed and NCAP-table selections shape the NCAP path. At each 25 ms sample, the
 scheduled path state is evaluated at distance `speed * time`, yielding
 `reference_x_m`, `reference_y_m`, heading, and geometric curvature. The NCAP
-arc begins at **5.0 s**. At each 25 ms control tick, Pure Pursuit reads the
+arc begins at the configurable approach time, **5.0 s** by default. At each
+25 ms control tick, Pure Pursuit reads the
 simulated front-axle position and heading, picks a point ahead on the NCAP
 path, and computes a steering command from that position error. For rear-axle
 steering geometry, the target comes from a reference station one wheelbase

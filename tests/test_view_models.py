@@ -57,6 +57,41 @@ class RecordingCanvas:
 
 
 class ViewModelTests(unittest.TestCase):
+    @staticmethod
+    def _contrast_ratio(first: str, second: str) -> float:
+        def luminance(color: str) -> float:
+            channels = [int(color[index:index + 2], 16) / 255
+                        for index in (1, 3, 5)]
+            linear = [value / 12.92 if value <= 0.04045
+                      else ((value + 0.055) / 1.055) ** 2.4
+                      for value in channels]
+            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+        lighter, darker = sorted((luminance(first), luminance(second)),
+                                  reverse=True)
+        return (lighter + 0.05) / (darker + 0.05)
+
+    def test_light_palette_is_high_contrast_and_dark_palette_is_unchanged(self) -> None:
+        light = palette_for(ThemeMode.LIGHT)
+        dark = palette_for(ThemeMode.DARK)
+        self.assertEqual(
+            (dark.background, dark.panel, dark.panel_alt, dark.foreground,
+             dark.muted, dark.border, dark.grid, dark.accent, dark.accent_hover,
+             dark.accent_text, dark.cyan, dark.green, dark.orange,
+             dark.yellow, dark.magenta),
+            ("#0d0f1c", "#171a2a", "#22263a", "#f0f0f7", "#a8a9bd",
+             "#373b59", "#3a3d57", "#6d61d5", "#7467dc", "#b3aaff",
+             "#22d3ee", "#42d392", "#ff8a4c", "#ffd166", "#f05bd8"))
+        self.assertGreaterEqual(self._contrast_ratio(light.foreground, light.panel), 12)
+        self.assertGreaterEqual(self._contrast_ratio(light.muted, light.panel), 7)
+        for color in (light.cyan, light.green, light.orange,
+                      light.yellow, light.magenta):
+            self.assertGreaterEqual(self._contrast_ratio(color, light.panel), 4.5)
+        self.assertGreater(self._contrast_ratio(light.border, light.panel),
+                           self._contrast_ratio("#d2dce4", "#ffffff"))
+        self.assertGreater(self._contrast_ratio(light.grid, light.panel),
+                           self._contrast_ratio("#dbe3e9", "#ffffff"))
+
     def test_chart_view_zoom_pan_and_reset_are_bounded(self) -> None:
         view = ChartView()
         view.zoom(0.5, 0.5, zoom_in=True)
@@ -88,17 +123,22 @@ class ViewModelTests(unittest.TestCase):
             LateralVelocityChartRenderer(palette).draw(velocity, run, 120)
             LateralTrajectoryChartRenderer(palette).draw(trajectory, run, 120)
             CurvatureChartRenderer(palette).draw(curvature, run, 120)
-            self.assertIn("STEERING WHEEL ANGLE (SWA) [°]", steering.texts)
+            self.assertEqual(SteeringAngleChartRenderer.title,
+                             "STEERING WHEEL ANGLE (SWA) [°]")
+            self.assertNotIn(SteeringAngleChartRenderer.title, steering.texts)
             self.assertIn("Steering Wheel Angle (SWA)", steering.texts)
             self.assertIn("NCAP reference", steering.texts)
             self.assertNotIn("Applied", steering.texts)
             self.assertNotIn("Pursuit", steering.texts)
-            self.assertNotIn("LATERAL VELOCITY [m/s]", steering.texts)
-            self.assertIn("LATERAL VELOCITY [m/s]", velocity.texts)
-            self.assertNotIn("STEERING WHEEL ANGLE (SWA) [°]", velocity.texts)
-            self.assertIn("LATERAL TRAJECTORY [m]", trajectory.texts)
-            self.assertIn("CURVATURE [1/km]", curvature.texts)
-            self.assertTrue(any("Tracking error" in text for text in trajectory.texts))
+            self.assertEqual(LateralVelocityChartRenderer.title,
+                             "LATERAL VELOCITY [m/s]")
+            self.assertNotIn(LateralVelocityChartRenderer.title, velocity.texts)
+            self.assertEqual(LateralTrajectoryChartRenderer.title,
+                             "LATERAL TRAJECTORY [m]")
+            self.assertNotIn(LateralTrajectoryChartRenderer.title, trajectory.texts)
+            self.assertEqual(CurvatureChartRenderer.title, "CURVATURE [1/km]")
+            self.assertNotIn(CurvatureChartRenderer.title, curvature.texts)
+            self.assertFalse(any("Tracking error" in text for text in trajectory.texts))
             self.assertTrue(any(rectangle.get("fill") == palette.panel
                                 for rectangle in steering.rectangles))
             signal_colors = {palette.magenta, palette.cyan, palette.orange,
@@ -131,7 +171,19 @@ class ViewModelTests(unittest.TestCase):
         self.assertIn("GVT", target_canvas.texts)
         self.assertIn("Initial", telemetry_view(oncoming, 0).target)
 
-    def test_new_steering_readouts_follow_selected_frame(self) -> None:
+        overtaking = SimulationEngine().run_elk(
+            ElkScenario.OVERTAKING, 0.4, safe_termination=False)
+        synchronization = telemetry_view(overtaking, 0).target
+        self.assertIn("GVT front", synchronization)
+        self.assertIn("VUT rear axle", synchronization)
+        self.assertIn("Δx +0.0000 m", synchronization)
+
+        initial_canvas = RecordingCanvas(width=1120, height=260)
+        renderer.draw(initial_canvas, oncoming, 0, 3.5, "Dashed")
+        self.assertTrue(any(text.startswith("GVT ")
+                            for text in initial_canvas.texts))
+
+    def test_chart_values_stay_hidden_without_timeline_drag(self) -> None:
         run = SimulationEngine().run_lka()
         chart = RecordingCanvas(height=260)
         road = RecordingCanvas()
@@ -139,12 +191,13 @@ class ViewModelTests(unittest.TestCase):
             sample = run.samples[index]
             SteeringChartRenderer().draw(chart, run, index)
             RoadRenderer().draw(road, run, index, 3.5, "Dashed")
-            self.assertTrue(any(f"SWA {sample.steering_command_deg:+.2f}°" in text
-                                for text in chart.texts))
-            self.assertTrue(any(f"Area estimate ≈ {sample.v_lat_from_steering_mps:+.3f}" in text
-                                for text in chart.texts))
+            self.assertFalse(any(f"SWA {sample.steering_command_deg:+.2f}°" in text
+                                 for text in chart.texts))
+            self.assertFalse(any("Area estimate ≈" in text for text in chart.texts))
             self.assertEqual(telemetry_view(run, index).steering,
-                             f"SWA {sample.steering_command_deg:+.2f}°")
+                             (f"Robot {sample.robot_steering_command_deg:+.2f}° · "
+                              f"EPS {sample.eps_steering_wheel_deg:+.2f}° · "
+                              f"ELK {sample.elk_steering_command_deg:+.2f}°"))
             self.assertFalse(any("look-ahead" in text.lower() for text in road.texts))
             if index < len(run.samples) - 1:
                 self.assertAlmostEqual(run.samples[index + 1].steering_wheel_deg,
@@ -154,7 +207,7 @@ class ViewModelTests(unittest.TestCase):
         run = SimulationEngine().run_lka(lane_support=lambda _state: 0.0)
         canvas = RecordingCanvas()
         RoadRenderer().draw(canvas, run, 0, 3.5, "Solid")
-        self.assertIn("Pursuit handover", telemetry_view(run, 0).phase)
+        self.assertIn("ELK intervention", telemetry_view(run, 0).phase)
 
     def test_lane_and_marking_widths_share_physical_scale(self) -> None:
         for lane_width in ROAD.lane_width_options_m:

@@ -1,5 +1,8 @@
 """Euro NCAP lane-departure simulation and viewer."""
-from .config import NCAP_PATH, ROAD, SIMULATION, VEHICLE, RoadConfig, SimulationConfig, VehicleParams
+from .config import (NCAP_ALTERNATIVE_DIM, NCAP_ALTERNATIVE_DIM_TABLE,
+                     NCAP_PATH, NCAP_STANDARD, NCAP_STANDARD_TABLE, ROAD,
+                     SIMULATION, VEHICLE, RoadConfig, SimulationConfig,
+                     VehicleParams)
 from .dynamics import KinematicBicycleModel, LateralBicycleModel
 from .export import save_csv
 from .scenarios.elk import (ELK_SCENARIOS, ElkPath, ElkScenario,
@@ -10,7 +13,9 @@ from .simulation import (SimulationEngine, SimulationRun, SimulationSample,
 from .steering import PurePursuitController, SteeringCommand
 
 __all__ = [
-    "NCAP_PATH", "ROAD", "SIMULATION", "VEHICLE", "RoadConfig",
+    "NCAP_PATH", "NCAP_STANDARD", "NCAP_ALTERNATIVE_DIM",
+    "NCAP_STANDARD_TABLE", "NCAP_ALTERNATIVE_DIM_TABLE",
+    "ROAD", "SIMULATION", "VEHICLE", "RoadConfig",
     "SimulationConfig", "VehicleParams", "KinematicBicycleModel",
     "LateralBicycleModel", "NcapPath",
     "SimulationEngine", "SimulationRun", "SimulationSample", "save_csv",

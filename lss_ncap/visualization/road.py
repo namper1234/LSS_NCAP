@@ -33,7 +33,7 @@ class RoadRenderer:
         canvas.delete("all")
         sample, path = run.samples[index], run.path
         width, height = max(canvas.winfo_width(), 1), max(canvas.winfo_height(), 1)
-        divider_y = path.side * (path.arc_y + path.d2 + self.vehicle.body_width_m / 2)
+        divider_y = path.side * (path.line_offset_m + self.vehicle.body_width_m / 2)
         # A road edge should read as a shoulder, not as half a canvas of grass.
         # Move the tested boundary lower while keeping the exact metre scale.
         viewport_road = (replace(self.road, divider_y_fraction=0.68)
@@ -106,13 +106,22 @@ class RoadRenderer:
                                fill=self.palette.cyan, width=2, smooth=True)
 
         if run.target_samples:
+            target_trail = [screen(target.x_m, target.y_m)
+                            for target in run.target_samples[:index + 1:3]]
+            if len(target_trail) > 1:
+                canvas.create_line(
+                    *[coordinate for point in target_trail for coordinate in point],
+                    fill=self.palette.green, width=2, dash=(5, 3), smooth=True)
             target_sample = run.target_samples[index]
-            self.target_vehicle_painter.draw(
+            target_outline = self.target_vehicle_painter.draw(
                 canvas, view, center_x_m=target_sample.x_m,
                 center_y_m=target_sample.y_m, yaw_deg=target_sample.yaw_deg,
                 length_m=self.vehicle.body_length_m,
                 width_m=self.vehicle.body_width_m,
                 style=TARGET_STYLE, label=target_sample.label)
+            self._draw_target_locator(
+                canvas, view, sample.front_x_m, target_sample.x_m,
+                target_sample.y_m, target_outline, width, height)
 
         yaw = math.radians(sample.yaw_deg)
         ego_center_x = sample.front_x_m - self.vehicle.l_front_m * math.cos(yaw)
@@ -126,7 +135,8 @@ class RoadRenderer:
                            fill="#5ba8ef", outline="#e2e9ee")
 
         legend_y = height - 24
-        canvas.create_rectangle(14, legend_y - 15, 334, legend_y + 15,
+        legend_right = 470 if run.target_samples else 334
+        canvas.create_rectangle(14, legend_y - 15, legend_right, legend_y + 15,
                                 fill=self.palette.panel, outline=self.palette.border)
         canvas.create_line(22, legend_y, 45, legend_y, fill="#e88a63", width=3)
         canvas.create_text(52, legend_y, anchor="w", fill=self.palette.foreground,
@@ -135,3 +145,49 @@ class RoadRenderer:
                            fill=self.palette.cyan, width=3)
         canvas.create_text(206, legend_y, anchor="w", fill=self.palette.foreground,
                            font=ui_font(TYPE_SCALE.label), text="Front axle path")
+        if run.target_samples:
+            canvas.create_line(326, legend_y, 349, legend_y,
+                               fill=self.palette.green, width=3, dash=(5, 3))
+            canvas.create_text(356, legend_y, anchor="w",
+                               fill=self.palette.foreground,
+                               font=ui_font(TYPE_SCALE.label), text="GVT path")
+
+    def _draw_target_locator(
+            self, canvas: tk.Canvas, view: RoadViewport, ego_x_m: float,
+            target_x_m: float, target_y_m: float,
+            outline: list[tuple[float, float]], width: int, height: int) -> None:
+        """Keep the GVT unambiguous even before it enters the road viewport."""
+        accent = "#42e6a4" if self.palette.background.startswith("#0") else "#08784f"
+        min_x = min(point[0] for point in outline)
+        max_x = max(point[0] for point in outline)
+        min_y = min(point[1] for point in outline)
+        max_y = max(point[1] for point in outline)
+        visible = max_x >= 18 and min_x <= width - 18 and max_y >= 4 and min_y <= height - 4
+        if visible:
+            canvas.create_polygon(
+                *[coordinate for point in outline for coordinate in point],
+                fill="", outline=accent, width=3)
+            label_x = max(42, min(width - 42, (min_x + max_x) / 2))
+            label_y = max(13, min_y - 9)
+            canvas.create_text(label_x, label_y, text="GVT", fill=accent,
+                               font=ui_font(TYPE_SCALE.label, "bold"))
+            return
+
+        screen_x, screen_y = view.screen(target_x_m, target_y_m)
+        marker_x = max(30, min(width - 30, screen_x))
+        marker_y = max(18, min(height - 42, screen_y))
+        points = ((marker_x - 10, marker_y - 8),
+                  (marker_x + 10, marker_y),
+                  (marker_x - 10, marker_y + 8))
+        if screen_x < 0:
+            points = tuple((2 * marker_x - x, y) for x, y in points)
+        canvas.create_polygon(
+            *[coordinate for point in points for coordinate in point],
+            fill=accent, outline=self.palette.foreground, width=1)
+        distance_m = abs(target_x_m - ego_x_m)
+        anchor = "e" if screen_x > width else "w"
+        text_x = marker_x - 15 if anchor == "e" else marker_x + 15
+        canvas.create_text(
+            text_x, marker_y, anchor=anchor, fill=accent,
+            font=ui_font(TYPE_SCALE.label, "bold"),
+            text=f"GVT {distance_m:.0f} m")

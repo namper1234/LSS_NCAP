@@ -25,8 +25,12 @@ class CollisionTests(unittest.TestCase):
         )
         for scenario, lateral_speed, options in cases:
             with self.subTest(scenario=scenario, options=options):
-                run = self.engine.run_elk(scenario, lateral_speed, **options)
+                run = self.engine.run_elk(
+                    scenario, lateral_speed, safe_termination=False, **options)
                 self.assertTrue(run.collision_detected)
+                self.assertIsNotNone(run.protocol_termination_time_s)
+                self.assertLess(run.protocol_termination_time_s,
+                                run.collision_time_s)
                 self.assertEqual(run.duration_s, run.collision_time_s)
                 self.assertNotAlmostEqual(
                     run.duration_s / run.config.sample_period_s,
@@ -40,6 +44,18 @@ class CollisionTests(unittest.TestCase):
                 telemetry = telemetry_view(run, len(run.samples) - 1)
                 self.assertEqual(telemetry.collision_status, "COLLISION DETECTED")
                 self.assertTrue(telemetry.state.startswith("0 km/h"))
+
+    def test_protocol_termination_precedes_predicted_collision(self) -> None:
+        run = self.engine.run_elk(ElkScenario.ONCOMING, 0.4)
+        self.assertFalse(run.collision_detected)
+        self.assertIsNotNone(run.predicted_collision_time_s)
+        self.assertLess(run.duration_s, run.predicted_collision_time_s)
+        self.assertIn(run.termination_reason,
+                      ("protocol_failure_ttc", "protocol_failure_separation"))
+        final = run.samples[-1]
+        self.assertTrue((final.ttc_s is not None and final.ttc_s <= 0.8)
+                        or (final.lateral_separation_m is not None
+                            and final.lateral_separation_m < 0.3))
 
     def test_nontraffic_elk_has_no_collision_state(self) -> None:
         run = self.engine.run_elk(ElkScenario.ROAD_EDGE, 0.4)

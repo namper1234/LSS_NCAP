@@ -33,6 +33,28 @@ ELK_INTENTIONAL_PATH: dict[float, tuple[float, float, float]] = {
     0.7: (2.01, 0.49, 0.53),
 }
 
+ELK_UNINTENTIONAL_PATH = {
+    speed: NCAP_PATH[speed] for speed in (0.2, 0.3, 0.4, 0.5, 0.6)
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ElkExecutionTolerances:
+    """Euro NCAP LSS v4.2 §7.4 execution tolerances (not pass criteria)."""
+
+    vut_speed_kph: float = 1.0
+    target_speed_kph: float = 1.0
+    relative_speed_kph: float = 1.0
+    path_deviation_m: float = 0.05
+    lateral_speed_mps: float = 0.05
+    yaw_rate_deg_s: float = 1.0
+    steering_wheel_velocity_deg_s: float = 15.0
+    target_lateral_deviation_m: float = 0.05
+    intentional_indicator_timing_s: float = 0.5
+
+
+ELK_EXECUTION_TOLERANCES = ElkExecutionTolerances()
+
 
 @dataclass(frozen=True, slots=True)
 class ElkScenarioDefinition:
@@ -47,16 +69,16 @@ class ElkScenarioDefinition:
 
 ELK_SCENARIOS: dict[ElkScenario, ElkScenarioDefinition] = {
     ElkScenario.ROAD_EDGE: ElkScenarioDefinition(
-        ElkScenario.ROAD_EDGE, "Road Edge", (-1,), tuple(NCAP_PATH),
+        ElkScenario.ROAD_EDGE, "Road Edge", (-1,), tuple(ELK_UNINTENTIONAL_PATH),
         "road_edge", "Road edge"),
     ElkScenario.SOLID_LINE: ElkScenarioDefinition(
-        ElkScenario.SOLID_LINE, "Solid Line", (-1, 1), tuple(NCAP_PATH),
+        ElkScenario.SOLID_LINE, "Solid Line", (-1, 1), tuple(ELK_UNINTENTIONAL_PATH),
         "solid_line", "Solid line"),
     ElkScenario.ONCOMING: ElkScenarioDefinition(
-        ElkScenario.ONCOMING, "Oncoming Vehicle", (1,), tuple(NCAP_PATH),
+        ElkScenario.ONCOMING, "Oncoming Vehicle", (1,), tuple(ELK_UNINTENTIONAL_PATH),
         "oncoming", "Centre dashed line", TargetMotion.ONCOMING_72),
     ElkScenario.OVERTAKING: ElkScenarioDefinition(
-        ElkScenario.OVERTAKING, "Overtaking Vehicle", (1,), tuple(NCAP_PATH),
+        ElkScenario.OVERTAKING, "Overtaking Vehicle", (1,), tuple(ELK_UNINTENTIONAL_PATH),
         "overtaking", "Centre dashed line", TargetMotion.OVERTAKING_72),
 }
 
@@ -74,7 +96,8 @@ def elk_definition(scenario: ElkScenario | str, *,
     if scenario == ElkScenario.OVERTAKING:
         if motion not in (TargetMotion.OVERTAKING_72, TargetMotion.OVERTAKING_80):
             raise ValueError("Overtaking target must travel at 72 or 80 km/h")
-        speeds = (0.5, 0.6, 0.7) if intent == LaneChangeIntent.INTENTIONAL else tuple(NCAP_PATH)
+        speeds = ((0.5, 0.6, 0.7) if intent == LaneChangeIntent.INTENTIONAL
+                  else tuple(ELK_UNINTENTIONAL_PATH))
         return ElkScenarioDefinition(base.scenario, base.label, base.allowed_sides,
                                      speeds, base.road_layout, base.tested_boundary, motion)
     if intent != LaneChangeIntent.UNINTENTIONAL:
@@ -100,5 +123,6 @@ class ElkPath(NcapPath):
         intentional = (self.elk_scenario == ElkScenario.OVERTAKING
                        and self.intent == LaneChangeIntent.INTENTIONAL)
         super().__init__(lateral_speed, side, config=config,
-                         path_parameters=ELK_INTENTIONAL_PATH if intentional else NCAP_PATH,
+                         path_parameters=(ELK_INTENTIONAL_PATH if intentional
+                                          else ELK_UNINTENTIONAL_PATH),
                          radius_m=800.0 if intentional else 1200.0)

@@ -5,7 +5,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from .config import NCAP_PATH, SIMULATION
+from .config import NCAP_PATH, NCAP_PATH_TABLES, NCAP_STANDARD, SIMULATION
 from .export import export_run, export_swa_profile
 from .scenarios.elk import ElkScenario, LaneChangeIntent, TargetMotion
 from .simulation import SimulationEngine
@@ -15,8 +15,11 @@ LOGGER = logging.getLogger(__name__)
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Euro NCAP LKA/ELK simulation and viewer")
-    parser.add_argument("--vlat", type=float, choices=sorted((*NCAP_PATH, 0.7)), default=0.4,
+    parser.add_argument("--vlat", type=float, choices=sorted(NCAP_PATH), default=0.4,
                         help="NCAP target lateral speed in m/s (default 0.4)")
+    parser.add_argument("--ncap-profile", choices=tuple(NCAP_PATH_TABLES),
+                        default=NCAP_STANDARD,
+                        help="LKA path table: standard or alternative_dim")
     parser.add_argument("--side", choices=("left", "right"), default=None,
                         help="departure side (scenario default when omitted)")
     parser.add_argument("--mode", choices=("lka", "elk"), default="lka")
@@ -40,7 +43,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.headless:
             engine = SimulationEngine()
             if args.mode == "lka":
-                run = engine.run_lka(args.vlat, 1 if side is None else side)
+                run = engine.run_lka(args.vlat, 1 if side is None else side,
+                                     profile=args.ncap_profile)
             else:
                 target_motion = None
                 if args.elk_scenario == ElkScenario.OVERTAKING.value:
@@ -66,6 +70,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Initial VUT front axle=(0.000, 0.000) m; "
                       f"GVT=({target.x_m:.3f}, {target.y_m:.3f}) m; "
                       f"GVT speed={target.speed_mps * 3.6:.1f} km/h")
+            if run.nominal_sync_time_s is not None:
+                print(
+                    f"Nominal overtaking sync: t={run.nominal_sync_time_s:.6f} s; "
+                    f"GVT front={run.nominal_gvt_front_edge_x_m:.6f} m; "
+                    f"VUT rear axle={run.nominal_vut_rear_axle_x_m:.6f} m; "
+                    f"dx={run.nominal_sync_error_m:+.9f} m; "
+                    f"first polygon contact={run.predicted_collision_time_s:.6f} s")
         else:
             from .ui.app import SimulationApp
             SimulationApp(args.vlat, 1 if side is None else side).run()

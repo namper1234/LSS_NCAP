@@ -70,10 +70,18 @@ class SimulationTests(unittest.TestCase):
             saved = list(csv.DictReader(file))
         run = SimulationEngine().run_lka()
         self.assertEqual(len(saved), len(run.samples))
-        self.assertEqual(saved, [
-            {key: str(value) for key, value in sample.as_row().items()}
-            for sample in run.samples
-        ])
+        for saved_row, sample in zip(saved, run.samples):
+            actual_row = sample.as_row()
+            self.assertEqual(set(saved_row), set(actual_row))
+            for key, value in actual_row.items():
+                with self.subTest(time_s=sample.time_s, column=key):
+                    if value is None:
+                        self.assertEqual(saved_row[key], "")
+                    elif isinstance(value, str):
+                        self.assertEqual(saved_row[key], value)
+                    else:
+                        self.assertAlmostEqual(float(saved_row[key]), value,
+                                               places=9)
 
     def test_reference_path_reaches_selected_lateral_speed_on_both_sides(self) -> None:
         engine = SimulationEngine()

@@ -15,7 +15,7 @@ from lss_ncap.steering import PurePursuitController
 class PurePursuitTests(unittest.TestCase):
     def test_lookahead_combines_minimum_distance_and_time(self) -> None:
         default = PurePursuitController(VEHICLE)
-        self.assertEqual(default.lookahead_m, 22.0)
+        self.assertEqual(default.lookahead_m, 10.0)
         self.assertEqual(PurePursuitController(
             VEHICLE, replace(SIMULATION, speed_mps=5)).lookahead_m, 8.0)
         self.assertEqual(PurePursuitController(
@@ -26,7 +26,7 @@ class PurePursuitTests(unittest.TestCase):
         path = NcapPath(0.4, 1)
         straight = pursuit.command(path, front_x_m=0, front_y_m=0, yaw_rad=0)
         self.assertEqual(straight.road_wheel_rad, 0.0)
-        self.assertEqual(straight.lookahead_distance_m, 22.0)
+        self.assertEqual(straight.lookahead_distance_m, 10.0)
         for offset in (-1.0, 1.0):
             command = pursuit.command(path, front_x_m=0,
                                       front_y_m=offset, yaw_rad=0)

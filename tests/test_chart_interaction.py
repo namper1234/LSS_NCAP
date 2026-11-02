@@ -202,7 +202,7 @@ class ChartViewTests(unittest.TestCase):
             initial_sample = app.run_data.samples[0]
             self.assertIn(f"Time {initial_sample.time_s:.3f} s",
                           app.timeline_inspection_var.get())
-            self.assertIn(f"SWA {initial_sample.steering_command_deg:+.2f}°",
+            self.assertIn(f"Robot {initial_sample.robot_steering_command_deg:+.2f}°",
                           app.telemetry_steering_var.get())
             for canvas in app.chart_canvases.values():
                 self.assertEqual(len(canvas.find_withtag("time-cursor")), 1)
@@ -259,7 +259,9 @@ class ChartViewTests(unittest.TestCase):
             self.assertIn(f"Time {selected_sample.time_s:.3f} s",
                           app.timeline_inspection_var.get())
             self.assertEqual(app.telemetry_steering_var.get(),
-                             f"SWA {selected_sample.steering_command_deg:+.2f}°")
+                             f"Robot {selected_sample.robot_steering_command_deg:+.2f}° · "
+                             f"EPS {selected_sample.eps_steering_wheel_deg:+.2f}° · "
+                             f"ELK {selected_sample.elk_steering_command_deg:+.2f}°")
             for canvas in app.chart_canvases.values():
                 canvas.event_generate("<Motion>", x=180, y=110)
                 root.update()

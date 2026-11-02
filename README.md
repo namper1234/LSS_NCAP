@@ -42,8 +42,8 @@ Linux system without `sudo`, set `SKIP_SYSTEM_DEPS=1` before the command.
 ```powershell
 # Windows 10/11
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -e . -r packaging/build-requirements.txt
-./packaging/build_windows.ps1 -Python .venv\Scripts\python.exe
+.\.venv\Scripts\python.exe -m pip install -e . -r packaging/build-requirements.txt
+./packaging/build_windows.ps1 -Python .\.venv\Scripts\python.exe
 ```
 
 The scripts use the shared `LSS_NCAP_Tool.spec` and produce portable ZIP files
@@ -194,7 +194,7 @@ and R = 800 m at 0.5–1.0 m/s. Selecting a lateral velocity loads that row's
 exact yaw, d1, and d2 values automatically.
 Changing these settings updates the road view and all three plots. Internally,
 the controller uses `max(minimum distance, speed * look-ahead time)` with fixed
-viewer defaults of 8 m and 1.1 s (22 m at 72 km/h).
+viewer defaults of 8 m and 0.5 s (10 m at 72 km/h).
 
 The lateral-speed and NCAP-table selections shape the NCAP path. At each 25 ms sample, the
 scheduled path state is evaluated at distance `speed * time`, yielding

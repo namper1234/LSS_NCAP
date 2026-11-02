@@ -70,6 +70,8 @@ def main() -> None:
                 "top_down_blue_car.png").is_file()
         assert (bundle / "_internal" / "lss_ncap" / "assets" /
                 "top_down_green_gvt.png").is_file()
+        assert (bundle / "_internal" / "lss_ncap" / "assets" /
+                "vinfast_app_icon.png").is_file()
         outside = temporary / "outside"
         outside.mkdir()
         lka = outside / "lka.csv"

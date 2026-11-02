@@ -50,7 +50,7 @@ class SimulationApp:
         self.root = root or tk.Tk()
         self.root.title("LSS Euro NCAP")
         self._window_icon = tk.PhotoImage(
-            file=str(resource_path("assets", "top_down_blue_car.png")))
+            file=str(resource_path("assets", "vinfast_app_icon.png")))
         self.root.iconphoto(True, self._window_icon)
         self.root.geometry("1280x990")
         self.root.minsize(980, 700)
@@ -104,6 +104,7 @@ class SimulationApp:
         self._expanded_panel: str | None = None
         self._expand_buttons: dict[str, ExpandButton] = {}
         self._build_ui()
+        self.root.bind("<Configure>", self._fit_chart_height)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.bind("<space>", self._keyboard_playback)
         self.root.bind("<Left>", lambda _event: self._step_frame(-1))
@@ -113,6 +114,15 @@ class SimulationApp:
             self.playback.frame_count - 1))
         self.root.bind("<Escape>", self._restore_on_escape)
         self.redraw()
+
+    def _fit_chart_height(self, event: tk.Event) -> None:
+        """Keep the road visible when desktop chrome leaves less vertical space."""
+        if event.widget is not self.root:
+            return
+        height = max(120, min(210, round(event.height * 0.17)))
+        for canvas in self.chart_canvases.values():
+            if int(canvas.cget("height")) != height:
+                canvas.configure(height=height)
 
     def _build_ui(self) -> None:
         controls = ttk.Frame(self.root, padding=(18, 10), style="Card.TFrame")

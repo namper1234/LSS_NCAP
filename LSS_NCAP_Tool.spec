@@ -6,7 +6,7 @@ root = Path.cwd().resolve()
 if not (root / "pyproject.toml").is_file():
     raise RuntimeError("Run PyInstaller from the project root")
 
-sprite = root / "lss_ncap" / "assets" / "top_down_blue_car.png"
+app_icon = root / "lss_ncap" / "assets" / "vinfast_app_icon.ico"
 analysis = Analysis(
     [str(root / "packaging" / "desktop_entry.py")],
     pathex=[str(root)],
@@ -31,7 +31,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
-    icon=str(sprite) if sys.platform == "win32" else None,
+    icon=str(app_icon) if sys.platform == "win32" else None,
 )
 bundle = COLLECT(
     exe,

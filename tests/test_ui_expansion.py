@@ -9,6 +9,30 @@ from lss_ncap.ui.app import SimulationApp
 
 
 class PanelExpansionTests(unittest.TestCase):
+    def test_charts_yield_space_to_road_in_short_windows(self) -> None:
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(f"Tk display unavailable: {error}")
+        app = None
+        try:
+            app = SimulationApp(root=root)
+            root.geometry("1280x990")
+            root.update()
+            tall_chart_height = app.steering_chart_canvas.winfo_height()
+            root.geometry("1280x780")
+            root.update()
+            self.assertLess(app.steering_chart_canvas.winfo_height(),
+                            tall_chart_height)
+            self.assertGreaterEqual(app.road_canvas.winfo_height(), 90)
+            self.assertEqual(len({canvas.winfo_height() for canvas in
+                                  app.chart_canvases.values()}), 1)
+        finally:
+            if app is not None:
+                app.close()
+            else:
+                root.destroy()
+
     def test_lookahead_defaults_are_internal_to_viewer(self) -> None:
         try:
             root = tk.Tk()

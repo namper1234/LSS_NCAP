@@ -58,6 +58,17 @@ Linux), they also start the packaged Tk viewer, draw plots, exercise zoom and
 reset, and switch to ELK. Build failure or a failed smoke check stops the
 script. Run `python3 -m unittest discover -s tests -v` before releasing.
 
+To request a native Windows build while working on Ubuntu, commit and push
+the current branch, then run:
+
+```bash
+./packaging/build_windows_from_ubuntu.sh
+```
+
+The script obtains GitHub CLI when needed, starts the release workflow,
+waits for its tests and smoke checks, and downloads the Windows ZIP to `dist/`.
+Sign in with `gh auth login -h github.com --web` if prompted.
+
 GitHub Actions runs the tests and native builds on Ubuntu 22.04 and Windows
 Server 2022. Pull requests and branch pushes retain the ZIPs as workflow
 artifacts. Pushing a `v*` tag publishes both ZIPs to a GitHub Release only

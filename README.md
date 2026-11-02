@@ -41,13 +41,15 @@ Linux system without `sudo`, set `SKIP_SYSTEM_DEPS=1` before the command.
 
 ```powershell
 # Windows 10/11
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e . -r packaging/build-requirements.txt
-./packaging/build_windows.ps1 -Python .\.venv\Scripts\python.exe
+./packaging/build_windows.ps1
 ```
 
-The scripts use the shared `LSS_NCAP_Tool.spec` and produce portable ZIP files
-under `dist/`. Launch `dist/LSS_NCAP_Tool/LSS_NCAP_Tool` on Linux or
+The Windows script creates `.venv`, installs dependencies, runs all tests,
+builds the executable, creates the ZIP, and smoke-tests the packaged app.
+If `python` is not the 64-bit Python 3.11+ interpreter, pass its path with
+`-Python`. The scripts use the shared `LSS_NCAP_Tool.spec` and produce
+portable ZIP files under `dist/`. Launch
+`dist/LSS_NCAP_Tool/LSS_NCAP_Tool` on Linux or
 `dist\LSS_NCAP_Tool\LSS_NCAP_Tool.exe` on Windows; the executable under
 `build/pyinstaller/` is an incomplete intermediate artifact. The scripts
 extract each ZIP to a temporary directory and test LKA,

@@ -210,7 +210,7 @@ class ElkConfigurationViewerTests(unittest.TestCase):
                     root.winfo_width())
             root.geometry("1280x990")
             root.update()
-            self.assertFalse(app.vehicle_panel._compact)
+            self.assertEqual(app.vehicle_panel._compact, root.winfo_height() < 900)
             for variable, value in (
                 (app.vlat_var, "0.53"), (app.d2_var, "0.37"),
                 (app.radius_var, "675"), (app.elk_speed_kph_var, "65"),

@@ -5,14 +5,16 @@ import math
 from dataclasses import asdict, dataclass, replace
 from typing import Callable
 
-from .config import (NCAP_ALTERNATIVE_DIM, NCAP_STANDARD, SIMULATION, VEHICLE,
+from .config import (NCAP_ALTERNATIVE_DIM, SIMULATION, VEHICLE,
                      ROAD, RoadConfig, SimulationConfig, VehicleParams)
 from .dynamics import KinematicBicycleModel
 from .scenarios.base import ReferencePath
 from .scenarios.lka import NcapPath
-from .scenarios.elk import (ElkPath, ElkScenario, LaneChangeIntent,
+from .scenarios.elk import (ElkParameters, ElkPath, ElkScenario, LaneChangeIntent,
                             TargetMotion, elk_definition)
+from .scenarios.encounter import NominalEncounter, synchronize_encounter
 from .steering import PurePursuitController
+from .targets import target_type
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +77,7 @@ class SimulationSample:
     road_wheel_deg: float
     steering_wheel_deg: float
     v_lat_mps: float
+    reference_v_lat_mps: float
     steering_command_deg: float
     reference_steering_wheel_deg: float
     steering_area_deg_s: float
@@ -120,6 +123,12 @@ class SimulationRun:
     overtaking_sync_compliant: bool | None = None
     termination_reason: str = "path_complete"
     protocol_assumptions: tuple[str, ...] = ()
+    elk_parameters: ElkParameters | None = None
+    nominal_encounter: NominalEncounter | None = None
+    target_vehicle: VehicleParams | None = None
+    no_intervention_samples: tuple[SimulationSample, ...] = ()
+    collision_point_m: tuple[float, float] | None = None
+    road: RoadConfig = ROAD
 
     def __post_init__(self) -> None:
         if not self.samples:
@@ -128,6 +137,14 @@ class SimulationRun:
     @property
     def duration_s(self) -> float:
         return self.samples[-1].time_s
+
+    @property
+    def collision_before_nominal_s(self) -> float | None:
+        """Positive gap when first contact prevents reaching the nominal encounter."""
+        if self.collision_time_s is None or self.nominal_encounter is None:
+            return None
+        gap = self.nominal_encounter.time_s - self.collision_time_s
+        return gap if gap > 1e-9 else None
 
     @property
     def pursuit_controller(self) -> PurePursuitController:
@@ -156,8 +173,31 @@ class SimulationRun:
                      and abs(sample.steering_command_deg) > 1e-6),
                     self.duration_s)
 
+    @property
+    def initial_lane_marker_distance_m(self) -> float:
+        """Initial VUT centreline to marking centre: d1 + d2 + half VUT width."""
+        return self.path.line_offset_m + self.vehicle.body_width_m / 2
+
+    @property
+    def lane_marker_inner_y_m(self) -> float:
+        """VUT-side marking edge, or the unpainted road boundary for road-edge runs."""
+        half_marking = 0.0 if self.road_layout == "road_edge" else self.road.marking_width_m / 2
+        return self.path.side * (
+            self.initial_lane_marker_distance_m - half_marking)
+
+    def lane_marker_clearance_m(self, index: int) -> float:
+        from .collision import lane_marker_clearance_m
+
+        return lane_marker_clearance_m(
+            self.samples[index], self.vehicle, self.lane_marker_inner_y_m, self.path.side)
+
     def rows(self) -> list[dict[str, float | str]]:
         rows = [sample.as_row() for sample in self.samples]
+        for index, row in enumerate(rows):
+            row["vut_lane_marker_clearance_m"] = self.lane_marker_clearance_m(index)
+        profile = (target_type(self.elk_parameters.gvt_type_key)
+                   if self.elk_parameters is not None
+                   and self.elk_parameters.gvt_type_key is not None else None)
         if self.target_samples:
             for row, target in zip(rows, self.target_samples):
                 row.update({
@@ -166,6 +206,44 @@ class SimulationRun:
                     "target_yaw_deg": target.yaw_deg,
                     "target_speed_mps": target.speed_mps,
                 })
+                if self.elk_parameters is not None:
+                    row.update({
+                        "target_overlap_percent": (self.elk_parameters.overlap_percent
+                                                   if self.scenario_key == "oncoming" else ""),
+                        "gvt_marker_distance_m": self.elk_parameters.gvt_marker_distance_m,
+                        "gvt_width_m": self.elk_parameters.gvt_width_m,
+                        "gvt_length_m": self.elk_parameters.gvt_length_m,
+                        "gvt_type": self.elk_parameters.gvt_type_key or "custom",
+                        "gvt_wheelbase_m": self.elk_parameters.resolved_gvt_wheelbase_m
+                        if self.elk_parameters.resolved_gvt_wheelbase_m is not None else "",
+                        "gvt_length_source": (
+                            "custom" if profile is None else
+                            profile.length_source(self.elk_parameters.gvt_length_m)),
+                        "gvt_length_wheel_diameter_m": (
+                            profile.length_wheel_diameter_m
+                            if profile is not None and profile.length_wheel_diameter_m is not None
+                            else ""),
+                        "gvt_dimension_source": profile.source_url if profile is not None else "",
+                        "intervention_active": row["steering_source"] == "lane_support",
+                        "trajectory_kind": ("elk_controlled" if self.elk_intervention_time_s is not None
+                                            else "no_intervention"),
+                        "no_intervention_collision_time_s": self.predicted_collision_time_s,
+                        "actual_collision_time_s": self.collision_time_s,
+                        "first_contact_x_m": (self.collision_point_m[0]
+                                             if self.collision_point_m is not None else ""),
+                        "first_contact_y_m": (self.collision_point_m[1]
+                                             if self.collision_point_m is not None else ""),
+                    })
+                    if self.nominal_encounter is not None:
+                        row.update({
+                            "nominal_overlap_m": self.nominal_encounter.overlap_m,
+                            "nominal_vut_front_x_m": self.nominal_encounter.vut_front_x_m,
+                            "nominal_vut_front_y_m": self.nominal_encounter.vut_front_y_m,
+                            "nominal_vut_yaw_deg": math.degrees(self.nominal_encounter.vut_yaw_rad),
+                            "nominal_gvt_x_m": self.nominal_encounter.target_x_m,
+                            "nominal_vut_reference_x_m": self.nominal_encounter.vut_reference_x_m,
+                            "nominal_reference": "scheduled_path_no_intervention",
+                        })
                 if self.nominal_sync_time_s is not None:
                     row.update({
                         "nominal_sync_time_s": self.nominal_sync_time_s,
@@ -201,11 +279,16 @@ class SimulationEngine:
 
     def run_lka(self, lateral_speed_mps: float = 0.4, side: int = 1, *,
                 lane_support: LaneSupportCommand | None = None,
-                profile: str = NCAP_STANDARD,
-                radius_m: float | None = None) -> SimulationRun:
+                profile: str | None = None,
+                radius_m: float | None = None,
+                d2_m: float | None = None) -> SimulationRun:
+        """Track configurable LKA geometry; explicit profiles select legacy tables."""
         path = NcapPath(lateral_speed_mps, side, config=self.config,
-                        profile=profile, radius_m=radius_m)
+                        profile=profile, radius_m=radius_m, d2_m=d2_m)
         run = self.run(path, lane_support=lane_support)
+        if profile is None:
+            return replace(run, scenario_key="lka_custom",
+                           scenario_name="Configurable LKA")
         if profile == NCAP_ALTERNATIVE_DIM:
             return replace(run, scenario_key="lka_alternative_dim",
                            scenario_name="Alternative NCAP (DIM)")
@@ -216,19 +299,43 @@ class SimulationEngine:
                 intent: LaneChangeIntent | str = LaneChangeIntent.UNINTENTIONAL,
                 target_motion: TargetMotion | str | None = None,
                 lane_support: LaneSupportCommand | None = None,
-                safe_termination: bool = True) -> SimulationRun:
+                safe_termination: bool | None = None,
+                parameters: ElkParameters | None = ElkParameters()) -> SimulationRun:
+        """Generate custom ELK; parameters=None explicitly reproduces legacy tables."""
+        if parameters is not None and target_motion is not None:
+            raise ValueError("Set parameters.gvt_speed_kph for custom ELK; target_motion is legacy-only")
         intent = LaneChangeIntent(intent)
         definition = elk_definition(scenario, target_motion=target_motion, intent=intent)
         selected_side = definition.allowed_sides[0] if side is None else side
         path = ElkPath(lateral_speed_mps, selected_side, definition.scenario,
-                       intent=intent, config=self.config)
+                       intent=intent, config=self.config, parameters=parameters)
+        if safe_termination is None:
+            safe_termination = parameters is None
+        target_vehicle = (self.vehicle if parameters is None else replace(
+            self.vehicle, body_length_m=parameters.gvt_length_m,
+            body_width_m=parameters.gvt_width_m))
+        if parameters is not None and parameters.resolved_gvt_wheelbase_m is not None:
+            # GVT motion is prescribed at its body centre; axle split is not measured.
+            wheelbase = parameters.resolved_gvt_wheelbase_m
+            target_vehicle = replace(target_vehicle, l_front_m=wheelbase / 2,
+                                     l_rear_m=wheelbase / 2)
+        nominal = (synchronize_encounter(
+            path, definition.scenario, self.config.speed_mps,
+            self.vehicle, self.road, parameters)
+            if parameters is not None and definition.target_motion != TargetMotion.NONE
+            else None)
         # Traffic encounters can occur well into the final constant-heading
         # straight at the lowest V_lat values.  Five seconds covers the
         # maximum polygon offset without altering any NCAP curve parameter.
         traffic_end = (path.s2 / self.config.speed_mps + 5.0
                        if definition.target_motion != TargetMotion.NONE else None)
+        if nominal is not None:
+            traffic_end = nominal.time_s + (
+                self.vehicle.body_width_m + target_vehicle.body_width_m
+            ) / lateral_speed_mps + self.config.departure_tail_s
         baseline = self.run(path, end_time_s=traffic_end)
-        encounter = self._target_encounter(path, definition.target_motion, baseline)
+        encounter = (nominal if nominal is not None else
+                     self._target_encounter(path, definition.target_motion, baseline))
         end_time = (path.s2 / self.config.speed_mps + 2.0
                     if definition.scenario == ElkScenario.ROAD_EDGE
                     else None if encounter is None else encounter.time_s + 1.0)
@@ -238,16 +345,15 @@ class SimulationEngine:
         if encounter is not None:
             from .collision import first_collision
             baseline_targets = self._target_samples(
-                baseline, definition.target_motion, encounter)
+                baseline, definition.target_motion, encounter, parameters=parameters)
             predicted = first_collision(
-                baseline.samples, baseline_targets, self.vehicle)
+                baseline.samples, baseline_targets, self.vehicle, target_vehicle)
             if predicted is not None:
                 predicted_collision_time_s = predicted.time_s
         is_overtaking = definition.target_motion in (
             TargetMotion.OVERTAKING_72, TargetMotion.OVERTAKING_80)
-        sync_error_m = (encounter.longitudinal_error_m
-                        if is_overtaking and encounter is not None else None)
-        sync_compliant = (None if sync_error_m is None
+        sync_error_m = (encounter.longitudinal_error_m if encounter is not None else None)
+        sync_compliant = (None if sync_error_m is None or not is_overtaking
                           else abs(sync_error_m) <= 1e-6)
         if sync_compliant is False:
             raise RuntimeError(
@@ -258,11 +364,14 @@ class SimulationEngine:
         run = (baseline if lane_support is None else
                self.run(path, lane_support=lane_support, end_time_s=end_time,
                         robot_release_time_s=release_time))
-        target_samples = self._target_samples(run, definition.target_motion, encounter)
+        target_samples = self._target_samples(
+            run, definition.target_motion, encounter, parameters=parameters)
         if target_samples:
-            run = replace(run, samples=self._traffic_telemetry(run.samples, target_samples))
+            run = replace(run, samples=self._traffic_telemetry(
+                run.samples, target_samples, target_vehicle))
         collision_detected = False
         collision_time_s = None
+        collision_point_m = None
         protocol_termination_time_s = None
         protocol_termination_reason = None
         termination_reason = "path_complete"
@@ -270,16 +379,23 @@ class SimulationEngine:
             # Local import avoids coupling the core sample definitions to the
             # optional traffic-interaction geometry module.
             from .collision import first_collision
-            collision = first_collision(run.samples, target_samples, self.vehicle)
+            collision = first_collision(
+                run.samples, target_samples, self.vehicle, target_vehicle)
             if collision is not None:
                 ego_prefix = tuple(sample for sample in run.samples
                                    if sample.time_s < collision.time_s - 1e-12)
                 target_prefix = tuple(sample for sample in target_samples
                                       if sample.time_s < collision.time_s - 1e-12)
-                run = replace(run, samples=ego_prefix + (collision.ego,))
+                reference_heading = path.at(
+                    self.config.speed_mps * collision.time_s)[2]
+                impact_sample = replace(
+                    collision.ego,
+                    reference_v_lat_mps=self.config.speed_mps * math.sin(reference_heading))
+                run = replace(run, samples=ego_prefix + (impact_sample,))
                 target_samples = target_prefix + (collision.target,)
                 collision_detected = True
                 collision_time_s = collision.time_s
+                collision_point_m = collision.contact_point_m
                 termination_reason = "collision"
             safe_end = self._protocol_traffic_end(run.samples, intervention_time)
             if safe_end is not None:
@@ -291,6 +407,7 @@ class SimulationEngine:
                     target_samples = target_samples[:end_index + 1]
                     collision_detected = False
                     collision_time_s = None
+                    collision_point_m = None
         return replace(
             run, mode="ELK", scenario_key=definition.scenario.value,
             scenario_name=definition.label, road_layout=definition.road_layout,
@@ -299,6 +416,7 @@ class SimulationEngine:
             target_samples=target_samples,
             collision_detected=collision_detected,
             collision_time_s=collision_time_s,
+            collision_point_m=collision_point_m,
             predicted_collision_time_s=predicted_collision_time_s,
             robot_release_time_s=release_time,
             elk_intervention_time_s=intervention_time,
@@ -307,10 +425,11 @@ class SimulationEngine:
             protocol_termination_time_s=protocol_termination_time_s,
             protocol_termination_reason=protocol_termination_reason,
             nominal_sync_time_s=(encounter.time_s
-                                 if is_overtaking and encounter is not None else None),
+                                 if encounter is not None and (is_overtaking or nominal is not None)
+                                 else None),
             nominal_gvt_front_edge_x_m=(
                 encounter.gvt_reference_edge_x_m
-                if is_overtaking and encounter is not None else None),
+                if encounter is not None else None),
             nominal_vut_rear_axle_x_m=(
                 encounter.vut_reference_x_m
                 if is_overtaking and encounter is not None else None),
@@ -321,8 +440,14 @@ class SimulationEngine:
                     and predicted_collision_time_s is not None) else None),
             overtaking_sync_compliant=sync_compliant,
             termination_reason=termination_reason,
+            elk_parameters=parameters, nominal_encounter=nominal,
+            target_vehicle=target_vehicle,
+            no_intervention_samples=(baseline.samples if nominal is not None else ()),
             protocol_assumptions=(
-                "GVT footprint uses configured VUT dimensions because LSS v4.2 references ISO 19206-3 without numeric GVT dimensions.",
+                ("GVT uses independently configured length and width."
+                 if parameters is not None else
+                 "GVT footprint uses configured VUT dimensions because LSS v4.2 references ISO 19206-3 without numeric GVT dimensions."),
+                "Custom geometry is exploratory, not a protocol certification; nominal synchronization uses the scheduled path without ELK reaction.",
                 "When OEM intervention timing is unavailable, safe traffic termination uses the first §7.4.7 threshold reached.",
                 "EPS response is the commanded road-wheel angle applied through the existing one-control-tick vehicle model.",
             ),
@@ -346,7 +471,7 @@ class SimulationEngine:
         for i in range(steps + 1):
             t = i * dt
             fx, fy, yaw = plant.front_pose
-            ref_x, ref_y, _, reference_curvature, phase = path.at(speed * t)
+            ref_x, ref_y, reference_heading, reference_curvature, phase = path.at(speed * t)
             _, tracking_y, tracking_heading, _, _ = path.at_x(fx)
             state = VehicleState(t, fx, fy, yaw, 0.0, plant.yaw_rate_rad_s,
                                  applied_sw_rad)
@@ -405,6 +530,7 @@ class SimulationEngine:
                 v_lat_mps=road_lateral_speed_mps(
                     yaw_deg, 0.0, speed, yaw_rate_rad_s=plant.yaw_rate_rad_s,
                     front_offset_m=p.wheelbase_m),
+                reference_v_lat_mps=speed * math.sin(reference_heading),
                 steering_command_deg=math.degrees(command_sw),
                 reference_steering_wheel_deg=math.degrees(
                     pursuit.reference_steering_wheel_rad(reference_curvature)),
@@ -422,7 +548,7 @@ class SimulationEngine:
                 steering_area_deg_s += math.degrees(command_sw) * h
                 plant.step_substep(command_sw / p.steer_ratio)
             applied_sw_rad = command_sw
-        return SimulationRun(path, tuple(samples), config, p)
+        return SimulationRun(path, tuple(samples), config, p, road=self.road)
 
     def _distance_at_lateral_position(self, path: ReferencePath,
                                       lateral_y_m: float) -> float:
@@ -501,11 +627,14 @@ class SimulationEngine:
             gvt_reference_edge_x - vut_reference_x)
 
     def _target_samples(self, run: SimulationRun, motion: TargetMotion,
-                        encounter: TargetEncounter | None,
+                        encounter: TargetEncounter | NominalEncounter | None, *,
+                        parameters: ElkParameters | None = None,
                         ) -> tuple[TargetVehicleSample, ...]:
         if encounter is None:
             return ()
-        speed = self._signed_target_speed(motion)
+        speed = (self._signed_target_speed(motion) if parameters is None else
+                 parameters.gvt_speed_kph / 3.6 * (
+                     -1 if motion == TargetMotion.ONCOMING_72 else 1))
         yaw_deg = 180.0 if speed < 0 else 0.0
         return tuple(TargetVehicleSample(sample.time_s,
                                         encounter.initial_x_m + speed * sample.time_s,
@@ -538,13 +667,15 @@ class SimulationEngine:
 
     def _traffic_telemetry(
             self, samples: tuple[SimulationSample, ...],
-            targets: tuple[TargetVehicleSample, ...]) -> tuple[SimulationSample, ...]:
+            targets: tuple[TargetVehicleSample, ...],
+            target_vehicle: VehicleParams | None = None) -> tuple[SimulationSample, ...]:
         from .collision import lateral_separation_m, time_to_collision_s
         return tuple(replace(
             sample,
             ttc_s=time_to_collision_s(sample, target, self.vehicle,
-                                      self.config.speed_mps),
-            lateral_separation_m=lateral_separation_m(sample, target, self.vehicle),
+                                      self.config.speed_mps, target_vehicle),
+            lateral_separation_m=lateral_separation_m(
+                sample, target, self.vehicle, target_vehicle),
         ) for sample, target in zip(samples, targets))
 
     @staticmethod

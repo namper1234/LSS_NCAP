@@ -314,11 +314,11 @@ class LateralVelocityChartRenderer(BaseChartRenderer):
         sample = run.samples[index]
         self._legend(canvas, width, (
             (16, "v_lat_mps", "Vehicle state", self.palette.yellow, ()),
-            (132, "v_lat_from_steering_mps", "SWA area estimate",
+            (132, "reference_v_lat_mps", "NCAP Reference",
              self.palette.green, (3, 3)),
         ))
         velocities = [getattr(sample_value, field) for sample_value in run.samples
-                      for field in ("v_lat_mps", "v_lat_from_steering_mps")]
+                      for field in ("v_lat_mps", "reference_v_lat_mps")]
         raw_minimum, raw_maximum = min(0.0, min(velocities)), max(0.0, max(velocities))
         if raw_maximum - raw_minimum < 0.1:
             raw_maximum = raw_minimum + 0.1
@@ -335,7 +335,7 @@ class LateralVelocityChartRenderer(BaseChartRenderer):
         xs = self._x_positions(run, geometry)
         for field, color, dash in (
             ("v_lat_mps", self.palette.yellow, ()),
-            ("v_lat_from_steering_mps", self.palette.green, (3, 3)),
+            ("reference_v_lat_mps", self.palette.green, (3, 3)),
         ):
             if not self.view.is_visible(field):
                 continue

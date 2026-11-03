@@ -1,4 +1,4 @@
-"""Euro NCAP LKA test path geometry."""
+"""Configurable straight-arc-tangent LKA reference geometry."""
 from __future__ import annotations
 
 import math
@@ -9,38 +9,52 @@ from .base import PathState
 
 
 class NcapPath:
+    """Derive LKA geometry from inputs, or explicitly reproduce a legacy table."""
+
     def __init__(self, lateral_speed: float, side: int,
                  straight_s: float | None = None,
                  config: SimulationConfig = SIMULATION, *,
-                 profile: str = NCAP_STANDARD,
+                 profile: str | None = None,
                  path_parameters: dict[float, tuple[float, float, float]] | None = None,
-                 radius_m: float | None = None) -> None:
-        if profile not in NCAP_PATH_TABLES:
+                 radius_m: float | None = None,
+                 d2_m: float | None = None) -> None:
+        if profile is not None and profile not in NCAP_PATH_TABLES:
             allowed_profiles = ", ".join(NCAP_PATH_TABLES)
             raise ValueError(f"profile must be one of {allowed_profiles}")
-        table = NCAP_PATH_TABLES[profile]
-        parameters = path_parameters or NCAP_PATH
-        if lateral_speed not in parameters:
-            allowed = ", ".join(f"{value:.1f}" for value in sorted(parameters))
-            raise ValueError(f"lateral_speed must be one of {allowed} m/s")
         if side not in (-1, 1):
             raise ValueError("side must be +1 (left) or -1 (right)")
-        if straight_s is not None and straight_s < 0:
-            raise ValueError("straight_s cannot be negative")
+        if straight_s is not None and (not math.isfinite(straight_s) or straight_s < 0):
+            raise ValueError("straight_s must be finite and nonnegative")
         self.vlat, self.side = lateral_speed, side
         self.config = config
         self.profile = profile
-        if path_parameters is None:
-            table_radius_m, self.psi_deg, self.d1_table, self.d2 = table[lateral_speed]
+        if profile is None and path_parameters is None:
+            if not math.isfinite(lateral_speed) or not 0 < lateral_speed < config.speed_mps:
+                raise ValueError("Lateral speed must be positive and below vehicle speed")
+            self.radius_m = config.path_radius_m if radius_m is None else radius_m
+            self.d2 = config.lka_d2_m if d2_m is None else d2_m
+            if not math.isfinite(self.d2) or self.d2 < 0:
+                raise ValueError("d2 must be finite and nonnegative")
+            self.psi = math.asin(lateral_speed / config.speed_mps)
+            self.psi_deg = math.degrees(self.psi)
+            self.d1_table = self.radius_m * (1.0 - math.cos(self.psi))
         else:
-            table_radius_m = config.path_radius_m
-            self.psi_deg, self.d1_table, self.d2 = parameters[lateral_speed]
-        self.psi = math.radians(self.psi_deg)
-        if (path_parameters is None and radius_m is not None
-                and not math.isclose(radius_m, table_radius_m)):
-            raise ValueError(
-                "LKA radius is fixed by the selected Euro NCAP table row")
-        self.radius_m = table_radius_m if radius_m is None else radius_m
+            if d2_m is not None:
+                raise ValueError("d2 cannot override a protocol table; omit profile")
+            parameters = NCAP_PATH if path_parameters is None else path_parameters
+            if lateral_speed not in parameters:
+                allowed = ", ".join(f"{value:.1f}" for value in sorted(parameters))
+                raise ValueError(f"lateral_speed must be one of {allowed} m/s")
+            if path_parameters is None:
+                table = NCAP_PATH_TABLES[profile or NCAP_STANDARD]
+                table_radius_m, self.psi_deg, self.d1_table, self.d2 = table[lateral_speed]
+                if radius_m is not None and not math.isclose(radius_m, table_radius_m):
+                    raise ValueError("LKA radius is fixed by the selected Euro NCAP table row")
+            else:
+                table_radius_m = config.path_radius_m
+                self.psi_deg, self.d1_table, self.d2 = parameters[lateral_speed]
+            self.psi = math.radians(self.psi_deg)
+            self.radius_m = table_radius_m if radius_m is None else radius_m
         if not math.isfinite(self.radius_m) or self.radius_m <= 0:
             raise ValueError("path radius must be finite and positive")
         radius = self.radius_m
@@ -54,7 +68,7 @@ class NcapPath:
 
     @property
     def line_offset_m(self) -> float:
-        """Protocol lane-marker offset, using the table's exact d1 and d2."""
+        """Lane-marker offset from the arc and tangent lateral distances."""
         return self.d1_table + self.d2
 
     def at(self, s: float) -> PathState:

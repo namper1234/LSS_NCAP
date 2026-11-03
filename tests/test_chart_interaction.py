@@ -163,7 +163,7 @@ class ChartViewTests(unittest.TestCase):
                  ("steering_command_deg", "reference_steering_wheel_deg"),
                  (20, 245)),
                 (app.velocity_chart_canvas, app.chart_views[2],
-                 ("v_lat_mps", "v_lat_from_steering_mps"), (20, 145)),
+                 ("v_lat_mps", "reference_v_lat_mps"), (20, 145)),
             ):
                 chart_canvas.event_generate("<ButtonPress-1>",
                                             x=positions[0],
@@ -184,6 +184,58 @@ class ChartViewTests(unittest.TestCase):
                                                 y=BaseChartRenderer.LEGEND_Y)
                 root.update()
                 self.assertTrue(all(chart_view.is_visible(field) for field in fields))
+        finally:
+            if app is not None:
+                app.close()
+            else:
+                root.destroy()
+
+    def test_velocity_reference_legend_zoom_reset_and_expansion(self) -> None:
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(f"Tk display unavailable: {error}")
+        app = None
+        try:
+            app = SimulationApp(root=root)
+            root.update()
+            canvas = app.velocity_chart_canvas
+            renderer = app.velocity_chart_renderer
+            view = app.chart_views[2]
+            labels = [canvas.itemcget(item, "text")
+                      for item in canvas.find_all() if canvas.type(item) == "text"]
+            self.assertIn("NCAP Reference", labels)
+            self.assertNotIn("SWA area estimate", labels)
+            self.assertFalse(canvas.find_withtag("series:v_lat_from_steering_mps"))
+            self.assertTrue(canvas.find_withtag("series:reference_v_lat_mps"))
+            self.assertEqual(renderer.legend_at(145, renderer.LEGEND_Y),
+                             "reference_v_lat_mps")
+            canvas.event_generate("<ButtonPress-1>", x=145, y=renderer.LEGEND_Y)
+            root.update()
+            self.assertFalse(view.is_visible("reference_v_lat_mps"))
+            self.assertFalse(canvas.find_withtag("series:reference_v_lat_mps"))
+            self.assertTrue(canvas.find_withtag("series:v_lat_mps"))
+            app.toggle_panel_expansion("velocity")
+            root.update()
+            left, top, right, bottom = renderer.plot_bounds()
+            canvas.event_generate("<MouseWheel>", x=round((left + right) / 2),
+                                  y=round((top + bottom) / 2), delta=120)
+            root.update()
+            self.assertLess(view.x_max - view.x_min, 1)
+            zoomed_limits = (view.x_min, view.x_max, view.y_min, view.y_max)
+            app.toggle_panel_expansion("velocity")
+            app.toggle_theme()
+            root.update()
+            self.assertEqual((view.x_min, view.x_max, view.y_min, view.y_max),
+                             zoomed_limits)
+            app.reset_chart_view("velocity")
+            root.update()
+            self.assertEqual((view.x_min, view.x_max, view.y_min, view.y_max),
+                             (0.0, 1.0, 0.0, 1.0))
+            self.assertFalse(view.is_visible("reference_v_lat_mps"))
+            canvas.event_generate("<ButtonPress-1>", x=145, y=renderer.LEGEND_Y)
+            root.update()
+            self.assertTrue(canvas.find_withtag("series:reference_v_lat_mps"))
         finally:
             if app is not None:
                 app.close()
@@ -230,7 +282,7 @@ class ChartViewTests(unittest.TestCase):
                     f"SWA {sample.steering_command_deg:+.2f}°",
                     f"NCAP {sample.reference_steering_wheel_deg:+.2f}°",
                     f"Vlat {sample.v_lat_mps:+.3f}",
-                    f"area {sample.v_lat_from_steering_mps:+.3f}",
+                    f"/ NCAP {sample.reference_v_lat_mps:+.3f} m/s",
                     f"y ref {sample.reference_y_m:+.3f}",
                     f"sim {sample.front_y_m:+.3f}",
                 ):
@@ -267,6 +319,7 @@ class ChartViewTests(unittest.TestCase):
                 root.update()
                 self.assertFalse(canvas.find_withtag("chart-tooltip"))
 
+            app.gvt_type_var.set("4activeC2-GVT")
             app.mode_var.set("ELK")
             app.elk_scenario_var.set("Oncoming Vehicle")
             app._scenario_selection_changed()

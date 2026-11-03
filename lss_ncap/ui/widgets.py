@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import tkinter as tk
 import tkinter.font as tkfont
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from .theme import UiPalette
 from .typography import TYPE_SCALE, ui_font
@@ -207,12 +207,18 @@ class DropdownSelect(tk.Canvas):
     """Rounded selector with a floating, theme-aware option menu."""
 
     def __init__(self, parent: tk.Misc, variable: tk.StringVar,
-                 values: tuple[str, ...], palette: UiPalette, width_chars: int) -> None:
+                 values: tuple[str, ...], palette: UiPalette, width_chars: int, *,
+                 images: Mapping[str, tk.PhotoImage] | None = None,
+                 option_labels: Mapping[str, str] | None = None) -> None:
         self.variable, self.values, self._palette = variable, tuple(values), palette
+        self.images = images or {}
+        self.option_labels = option_labels or {}
         self._state, self._hovered = "readonly", False
         self._popup: tk.Toplevel | None = None
         self._font = tkfont.Font(parent, font=ui_font(TYPE_SCALE.label))
         width = max(76, self._font.measure("0" * width_chars) + 38)
+        if self.images:
+            width += 52
         super().__init__(parent, width=width, height=34, highlightthickness=0,
                          bd=0, takefocus=True, cursor="hand2")
         self.bind("<Enter>", lambda _event: self._set_hover(True))
@@ -242,7 +248,11 @@ class DropdownSelect(tk.Canvas):
         self.create_polygon(ModernButton._rounded_points(1, 1, width - 1, height - 2, 10),
                             smooth=True, splinesteps=18, fill=fill,
                             outline=border, width=1)
-        self.create_text(13, height / 2, anchor="w", text=self.variable.get(),
+        image = self.images.get(self.variable.get())
+        if image is not None:
+            self.create_image(8, height / 2, image=image, anchor="w")
+        self.create_text(65 if image is not None else 13,
+                         height / 2, anchor="w", text=self.variable.get(),
                          fill=foreground, font=self._font)
         # Compact chevron avoids relying on platform-specific glyph rendering.
         arrow_x = width - 15
@@ -292,15 +302,21 @@ class DropdownSelect(tk.Canvas):
                              highlightthickness=1)
         container.pack(fill="both", expand=True)
         menu_width = max(int(self["width"]),
-                         max((self._font.measure(value) for value in self.values), default=60) + 42)
+                         max((self._font.measure(self.option_labels.get(value, value))
+                              for value in self.values), default=60)
+                         + (104 if self.images else 42))
         for value in self.values:
             selected = value == self.variable.get()
             label = tk.Label(
-                container, text=("✓  " if selected else "    ") + value,
+                container, text=("✓  " if selected else "    ")
+                + self.option_labels.get(value, value),
                 anchor="w", padx=10, pady=7, bg=self._palette.panel,
                 fg=self._palette.accent_text if selected else self._palette.foreground,
                 font=ui_font(TYPE_SCALE.label, "bold" if selected else "normal"),
                 cursor="hand2")
+            image = self.images.get(value)
+            if image is not None:
+                label.configure(image=image, compound="left")
             label.pack(fill="x")
             label.bind("<Enter>", lambda _event, row=label:
                        row.configure(bg=self._palette.panel_alt))
@@ -310,7 +326,11 @@ class DropdownSelect(tk.Canvas):
                        self._select(choice))
         popup.update_idletasks()
         x, y = self.winfo_rootx(), self.winfo_rooty() + self.winfo_height() + 5
-        popup.geometry(f"{menu_width}x{popup.winfo_reqheight()}+{x}+{y}")
+        popup_height = popup.winfo_reqheight()
+        x = max(0, min(x, self.winfo_screenwidth() - menu_width))
+        if y + popup_height > self.winfo_screenheight():
+            y = max(0, self.winfo_rooty() - popup_height - 5)
+        popup.geometry(f"{menu_width}x{popup_height}+{x}+{y}")
         popup.deiconify()
         popup.lift()
         popup.bind("<Escape>", lambda _event: self._close_popup())

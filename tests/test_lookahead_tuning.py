@@ -122,7 +122,7 @@ class LookaheadTuningTests(unittest.TestCase):
             SIMULATION, VEHICLE, "ELK", 0.6, 1,
             elk_scenario=ElkScenario.OVERTAKING,
             intent=LaneChangeIntent.INTENTIONAL,
-            target_motion=TargetMotion.OVERTAKING_80)
+            target_motion=TargetMotion.OVERTAKING_80, elk_parameters=None)
         selected = LookaheadTuner().tune(intentional).optimal
         self.assertIsNotNone(selected)
         final_run = intentional.run(selected.lookahead_time_s)

@@ -140,9 +140,11 @@ class TopDownCarPainter:
 class SpriteCarPainter:
     """Dimensionally scaled, rotation-cached raster painter with vector fallback."""
 
-    def __init__(self, asset_path: Path | None = None, cache_size: int = 128) -> None:
+    def __init__(self, asset_path: Path | None = None, cache_size: int = 128, *,
+                 source_image: Image.Image | None = None) -> None:
         self.asset_path = asset_path or EGO_SPRITE_PATH
-        source = Image.open(self.asset_path).convert("RGBA")
+        source = (Image.open(self.asset_path).convert("RGBA")
+                  if source_image is None else source_image.convert("RGBA"))
         alpha_bounds = source.getchannel("A").getbbox()
         self.source = source.crop(alpha_bounds) if alpha_bounds else source
         self.cache_size = cache_size

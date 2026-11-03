@@ -1,6 +1,7 @@
 """First-contact termination tests for ELK traffic scenarios."""
 from __future__ import annotations
 
+import math
 import unittest
 
 from lss_ncap.collision import vehicles_intersect
@@ -26,7 +27,7 @@ class CollisionTests(unittest.TestCase):
         for scenario, lateral_speed, options in cases:
             with self.subTest(scenario=scenario, options=options):
                 run = self.engine.run_elk(
-                    scenario, lateral_speed, safe_termination=False, **options)
+                    scenario, lateral_speed, safe_termination=False, parameters=None, **options)
                 self.assertTrue(run.collision_detected)
                 self.assertIsNotNone(run.protocol_termination_time_s)
                 self.assertLess(run.protocol_termination_time_s,
@@ -41,12 +42,17 @@ class CollisionTests(unittest.TestCase):
                     run.samples[-1], run.target_samples[-1], run.vehicle))
                 self.assertEqual(run.target_samples[-1].speed_mps, 0.0)
                 self.assertEqual(run.samples[-1].v_lat_mps, 0.0)
+                self.assertAlmostEqual(
+                    run.samples[-1].reference_v_lat_mps,
+                    run.config.speed_mps * math.sin(
+                        run.path.at(run.config.speed_mps * run.duration_s)[2]),
+                    places=12)
                 telemetry = telemetry_view(run, len(run.samples) - 1)
                 self.assertEqual(telemetry.collision_status, "COLLISION DETECTED")
                 self.assertTrue(telemetry.state.startswith("0 km/h"))
 
     def test_protocol_termination_precedes_predicted_collision(self) -> None:
-        run = self.engine.run_elk(ElkScenario.ONCOMING, 0.4)
+        run = self.engine.run_elk(ElkScenario.ONCOMING, 0.4, parameters=None)
         self.assertFalse(run.collision_detected)
         self.assertIsNotNone(run.predicted_collision_time_s)
         self.assertLess(run.duration_s, run.predicted_collision_time_s)

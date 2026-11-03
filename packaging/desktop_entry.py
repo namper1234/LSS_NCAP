@@ -65,6 +65,7 @@ def _smoke_gui() -> None:
         app.chart_views[0].zoom(0.5, 0.5, zoom_in=True)
         app.redraw_charts()
         app.reset_chart_views()
+        app.gvt_type_var.set("4activeC2-GVT")
         app.mode_var.set("ELK")
         app.elk_scenario_var.set("Oncoming Vehicle")
         app._scenario_selection_changed()

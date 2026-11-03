@@ -57,6 +57,7 @@ class SimulationConfig:
     departure_tail_s: float = 1.5
     lookahead_min_m: float = 8.0
     lookahead_time_s: float = 0.5
+    lka_d2_m: float = 1.0
 
     def __post_init__(self) -> None:
         positive_values = (
@@ -65,9 +66,10 @@ class SimulationConfig:
         )
         if not all(math.isfinite(value) and value > 0 for value in positive_values):
             raise ValueError("Simulation time steps, speed, and radius must be positive")
-        durations = (self.approach_s, self.departure_tail_s)
-        if not all(math.isfinite(value) and value >= 0 for value in durations):
-            raise ValueError("Approach and departure durations cannot be negative")
+        nonnegative_values = (self.approach_s, self.departure_tail_s, self.lka_d2_m)
+        if not all(math.isfinite(value) and value >= 0 for value in nonnegative_values):
+            raise ValueError(
+                "Approach/departure durations and LKA d2 must be finite and nonnegative")
         ratio = self.sample_period_s / self.substep_s
         if not math.isclose(ratio, round(ratio), rel_tol=0.0, abs_tol=1e-9):
             raise ValueError("Substep must divide the sample period exactly")

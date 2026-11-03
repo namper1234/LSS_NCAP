@@ -5,9 +5,9 @@ import math
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from .config import (NCAP_PATH_TABLES, NCAP_STANDARD, ROAD, RoadConfig,
+from .config import (NCAP_PATH_TABLES, ROAD, RoadConfig,
                      SimulationConfig, VehicleParams)
-from .scenarios.elk import ElkScenario, LaneChangeIntent, TargetMotion
+from .scenarios.elk import ElkParameters, ElkScenario, LaneChangeIntent, TargetMotion
 from .simulation import SimulationEngine, SimulationRun
 
 
@@ -18,13 +18,15 @@ class TuningRequest:
     mode: str
     lateral_speed_mps: float
     side: int
-    path_profile: str = NCAP_STANDARD
+    path_profile: str | None = None
     radius_m: float | None = None
     elk_scenario: ElkScenario | None = None
     intent: LaneChangeIntent = LaneChangeIntent.UNINTENTIONAL
     target_motion: TargetMotion | None = None
     road: RoadConfig = ROAD
     safe_termination: bool = True
+    d2_m: float | None = None
+    elk_parameters: ElkParameters | None = ElkParameters()
 
     def __post_init__(self) -> None:
         if self.mode not in ("LKA", "ELK") or self.side not in (-1, 1):
@@ -33,11 +35,14 @@ class TuningRequest:
             raise ValueError("Target lateral speed must be finite and positive")
         if self.mode == "ELK" and self.elk_scenario is None:
             raise ValueError("An ELK scenario is required")
-        if self.mode == "LKA" and self.path_profile not in NCAP_PATH_TABLES:
+        if (self.mode == "LKA" and self.path_profile is not None
+                and self.path_profile not in NCAP_PATH_TABLES):
             raise ValueError("A valid Euro NCAP LKA path profile is required")
         if self.radius_m is not None and (not math.isfinite(self.radius_m)
                                           or self.radius_m <= 0):
             raise ValueError("Path radius must be finite and positive")
+        if self.d2_m is not None and (not math.isfinite(self.d2_m) or self.d2_m < 0):
+            raise ValueError("d2 must be finite and nonnegative")
 
     def run(self, lookahead_time_s: float) -> SimulationRun:
         if not math.isfinite(lookahead_time_s) or lookahead_time_s <= 0:
@@ -47,11 +52,13 @@ class TuningRequest:
                                   self.vehicle, self.road)
         if self.mode == "LKA":
             return engine.run_lka(self.lateral_speed_mps, self.side,
-                                  profile=self.path_profile, radius_m=self.radius_m)
+                                  profile=self.path_profile, radius_m=self.radius_m,
+                                  d2_m=self.d2_m)
         return engine.run_elk(self.elk_scenario, self.lateral_speed_mps,
                               self.side, intent=self.intent,
                               target_motion=self.target_motion,
-                              safe_termination=self.safe_termination)
+                              safe_termination=self.safe_termination,
+                              parameters=self.elk_parameters)
 
 
 @dataclass(frozen=True, slots=True)

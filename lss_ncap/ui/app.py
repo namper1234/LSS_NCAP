@@ -9,18 +9,21 @@ from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from ..config import (NCAP_ALTERNATIVE_DIM, NCAP_STANDARD, NCAP_STANDARD_TABLE,
-                      ROAD, SIMULATION, RoadConfig, SimulationConfig)
+from ..config import (ROAD, SIMULATION, RoadConfig,
+                      SimulationConfig)
 from ..export import export_run, export_swa_profile
 from ..lookahead_tuning import TuningRequest
 from ..runtime import resource_path, user_export_dir
-from ..scenarios.elk import (ELK_SCENARIOS, ElkScenario, LaneChangeIntent,
-                             TargetMotion, elk_definition)
+from ..scenarios.elk import (ELK_SCENARIOS, ElkParameters, ElkScenario, LaneChangeIntent,
+                             elk_definition)
 from ..simulation import SimulationEngine, SimulationRun
+from ..targets import (CUSTOM_TARGET_TYPE, DEFAULT_TARGET_TYPE, GVT_TYPES,
+                       TargetType, target_type)
 from ..visualization.chart import (LateralVelocityChartRenderer,
                                    LateralTrajectoryChartRenderer,
                                    SteeringAngleChartRenderer)
 from ..visualization.road import RoadRenderer
+from ..visualization.targets import target_thumbnail
 from .playback import PlaybackClock, PlaybackState
 from .chart_interaction import ChartInteractionController, ChartView
 from .telemetry import telemetry_view
@@ -34,18 +37,17 @@ LOGGER = logging.getLogger(__name__)
 
 
 class SimulationApp:
-    standard_profile_label = "Standard NCAP · R 1200 m"
-    alternative_profile_label = "Alternative NCAP · DIM"
-
     def __init__(self, initial_vlat: float = 0.4, initial_side: int = 1,
                  *, engine: SimulationEngine | None = None,
+                 radius_m: float | None = None, d2_m: float | None = None,
                  road_config: RoadConfig = ROAD,
                  simulation_config: SimulationConfig = SIMULATION,
                  root: tk.Tk | None = None) -> None:
         self.engine = engine or SimulationEngine(simulation_config)
         self.road_config = road_config
         self.simulation_config = self.engine.config
-        self.run_data: SimulationRun = self.engine.run_lka(initial_vlat, initial_side)
+        self.run_data: SimulationRun = self.engine.run_lka(
+            initial_vlat, initial_side, radius_m=radius_m, d2_m=d2_m)
         self.playback = PlaybackState(len(self.run_data.samples))
         self.root = root or tk.Tk()
         self.root.title("LSS Euro NCAP")
@@ -67,20 +69,41 @@ class SimulationApp:
         self.velocity_chart_renderer = LateralVelocityChartRenderer(
             self.palette, self.chart_views[2])
         self._timer: str | None = None
+        self._regenerate_timer: str | None = None
+        self._layout_timer: str | None = None
+        self._generation_error: str | None = None
         self.playback_clock = PlaybackClock()
         self._syncing_timeline = False
-        self.vlat_var = tk.StringVar(self.root, value=f"{initial_vlat:.1f}")
+        self.vlat_var = tk.StringVar(self.root, value=f"{initial_vlat:g}")
         self.mode_var = tk.StringVar(self.root, value="LKA")
         self.elk_scenario_var = tk.StringVar(self.root, value="Road Edge")
         self.intent_var = tk.StringVar(self.root, value="Unintentional")
-        self.target_speed_var = tk.StringVar(self.root, value="72 km/h")
+        self.elk_speed_kph_var = tk.StringVar(
+            self.root, value=f"{self.engine.config.speed_mps * 3.6:g}")
+        self.gvt_speed_kph_var = tk.StringVar(self.root, value="72")
+        self.gvt_marker_distance_var = tk.StringVar(self.root, value="1.5")
+        self.overlap_var = tk.StringVar(self.root, value="10")
+        self.gvt_type_var = tk.StringVar(self.root, value=DEFAULT_TARGET_TYPE.name)
+        self._gvt_type_key = DEFAULT_TARGET_TYPE.key
+        self._confirmed_gvt_lengths: dict[str, str] = {}
+        self._custom_gvt_dimensions = (
+            f"{CUSTOM_TARGET_TYPE.length_m:g}", f"{CUSTOM_TARGET_TYPE.width_m:g}",
+            f"{CUSTOM_TARGET_TYPE.wheelbase_m:g}")
+        self.gvt_length_var = tk.StringVar(
+            self.root, value=f"{DEFAULT_TARGET_TYPE.default_length_m:g}")
+        self.gvt_width_var = tk.StringVar(self.root, value=f"{DEFAULT_TARGET_TYPE.width_m:g}")
+        self.gvt_wheelbase_var = tk.StringVar(
+            self.root, value=f"{DEFAULT_TARGET_TYPE.wheelbase_m:g}")
         self.side_var = tk.StringVar(self.root, value="Left" if initial_side == 1 else "Right")
         self.line_var = tk.StringVar(self.root, value="Dashed")
         self.lane_width_var = tk.StringVar(self.root,
                                            value=f"{road_config.default_lane_width_m:.1f}")
         self.approach_s_var = tk.StringVar(
             self.root, value=f"{self.engine.config.approach_s:g}")
-        self.lka_profile_var = tk.StringVar(self.root, value=self.standard_profile_label)
+        self.speed_mps_var = tk.StringVar(
+            self.root, value=f"{self.engine.config.speed_mps:g}")
+        self.radius_var = tk.StringVar(self.root, value=f"{self.run_data.path.radius_m:g}")
+        self.d2_var = tk.StringVar(self.root, value=f"{self.run_data.path.d2:g}")
         self.wheelbase_var = tk.StringVar(self.root,
                                           value=f"{self.engine.vehicle.wheelbase_m:g}")
         self.steer_ratio_var = tk.StringVar(self.root,
@@ -104,6 +127,13 @@ class SimulationApp:
         self._expanded_panel: str | None = None
         self._expand_buttons: dict[str, ExpandButton] = {}
         self._build_ui()
+        self.gvt_type_var.trace_add("write", self._gvt_type_changed)
+        for variable in (self.radius_var, self.d2_var, self.vlat_var,
+                         self.approach_s_var, self.speed_mps_var,
+                         self.elk_speed_kph_var, self.gvt_speed_kph_var,
+                         self.gvt_marker_distance_var, self.overlap_var,
+                         self.gvt_length_var, self.gvt_width_var, self.gvt_wheelbase_var):
+            variable.trace_add("write", self._schedule_regeneration)
         self.root.bind("<Configure>", self._fit_chart_height)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.bind("<space>", self._keyboard_playback)
@@ -115,11 +145,17 @@ class SimulationApp:
         self.root.bind("<Escape>", self._restore_on_escape)
         self.redraw()
 
-    def _fit_chart_height(self, event: tk.Event) -> None:
+    def _fit_chart_height(self, event: tk.Event | None = None) -> None:
         """Keep the road visible when desktop chrome leaves less vertical space."""
-        if event.widget is not self.root:
+        if event is not None and event.widget is not self.root:
             return
-        height = max(120, min(210, round(event.height * 0.17)))
+        if event is None:
+            self._layout_timer = None
+        window_height = self.root.winfo_height()
+        self.vehicle_panel.set_compact(window_height < 900)
+        height = max(120, min(210, round(window_height * 0.17)))
+        if window_height < 900 and self.traffic_settings.winfo_manager():
+            height = 100
         for canvas in self.chart_canvases.values():
             if int(canvas.cget("height")) != height:
                 canvas.configure(height=height)
@@ -136,26 +172,55 @@ class SimulationApp:
         settings_bottom.pack(fill="x", pady=(8, 0))
         settings_third = ttk.Frame(settings, style="Panel.TFrame")
         settings_third.pack(fill="x", pady=(8, 0))
+        self.traffic_settings = ttk.Frame(settings, style="Panel.TFrame")
         actions = ttk.Frame(controls, style="Panel.TFrame")
         self.mode_combo = self._combo(settings_top, "Function", self.mode_var,
                                       ("LKA", "ELK"), 6)
         self.scenario_combo = self._combo(
             settings_top, "Scenario", self.elk_scenario_var,
             tuple(definition.label for definition in ELK_SCENARIOS.values()), 20)
-        self.vlat_combo = self._combo(
-            settings_bottom, "Lateral speed (m/s)", self.vlat_var,
-            tuple(f"{value:.1f}" for value in sorted(self._speed_options())), 5)
+        self.elk_speed_entry = self._numeric_entry(
+            settings_top, "VUT (km/h)", self.elk_speed_kph_var)
+        self.gvt_speed_entry = self._numeric_entry(
+            settings_top, "GVT (km/h)", self.gvt_speed_kph_var)
+        self.vlat_entry = self._numeric_entry(
+            settings_bottom, "Lateral speed (m/s)", self.vlat_var)
+        self.speed_entry = self._numeric_entry(
+            settings_bottom, "Vehicle speed (m/s)", self.speed_mps_var)
         self.side_combo = self._combo(settings_bottom, "Departure", self.side_var,
                                       ("Left", "Right"), 7)
         self.intent_combo = self._combo(settings_bottom, "Lane change", self.intent_var,
                                         ("Unintentional", "Intentional"), 13)
-        self.target_speed_combo = self._combo(settings_bottom, "GVT speed", self.target_speed_var,
-                                              ("72 km/h", "80 km/h"), 9)
+        target_field = ttk.Frame(settings_bottom, style="Panel.TFrame")
+        target_field.pack(side="left", padx=(0, 16))
+        ttk.Label(target_field, text="GVT type", style="Panel.TLabel").pack(
+            side="left", padx=(0, 6))
+        self.gvt_type_combo = DropdownSelect(
+            target_field, self.gvt_type_var, tuple(target.name for target in GVT_TYPES),
+            self.palette, 15,
+            images={target.name: target_thumbnail(target, self.root) for target in GVT_TYPES},
+            option_labels={target.name: target.option_label for target in GVT_TYPES})
+        self.gvt_type_combo.pack(side="left")
+        self.modern_selectors.append(self.gvt_type_combo)
+        self.gvt_offset_entry = self._numeric_entry(
+            self.traffic_settings, "GVT centre offset (m)",
+            self.gvt_marker_distance_var, stacked=True)
+        self.overlap_entry = self._numeric_entry(
+            self.traffic_settings, "Overlap (% VUT)", self.overlap_var, stacked=True)
+        self.gvt_length_entry = self._numeric_entry(
+            self.traffic_settings, "GVT Length (m)", self.gvt_length_var, stacked=True)
+        self.gvt_width_entry = self._numeric_entry(
+            self.traffic_settings, "GVT Width (m)", self.gvt_width_var, stacked=True)
+        self.gvt_width_entry.configure(state="readonly")
+        self.gvt_wheelbase_entry = self._numeric_entry(
+            self.traffic_settings, "GVT Wheelbase (m)", self.gvt_wheelbase_var, stacked=True)
+        self.gvt_wheelbase_entry.configure(state="readonly")
         self.line_combo = self._combo(settings_third, "Lane line", self.line_var,
                                       ("Dashed", "Solid"), 7)
-        self.profile_combo = self._combo(
-            settings_third, "NCAP path", self.lka_profile_var,
-            (self.standard_profile_label, self.alternative_profile_label), 24)
+        self.d2_entry = self._numeric_entry(
+            settings_third, "d2 (m)", self.d2_var)
+        self.radius_entry = self._numeric_entry(
+            settings_third, "R (m)", self.radius_var)
         width_combo = self._combo(settings_third, "Lane width (m)", self.lane_width_var,
                                   tuple(f"{value:.1f}" for value in
                                         self.road_config.lane_width_options_m), 5)
@@ -164,11 +229,8 @@ class SimulationApp:
         self.mode_combo.bind("<<ComboboxSelected>>", self._scenario_selection_changed)
         self.scenario_combo.bind("<<ComboboxSelected>>", self._scenario_selection_changed)
         self.intent_combo.bind("<<ComboboxSelected>>", self._scenario_selection_changed)
-        self.target_speed_combo.bind("<<ComboboxSelected>>", self._scenario_selection_changed)
-        self.vlat_combo.bind("<<ComboboxSelected>>", lambda _event: self.regenerate())
         self.side_combo.bind("<<ComboboxSelected>>", lambda _event: self.regenerate())
         self.line_combo.bind("<<ComboboxSelected>>", lambda _event: self.redraw())
-        self.profile_combo.bind("<<ComboboxSelected>>", lambda _event: self.regenerate())
         width_combo.bind("<<ComboboxSelected>>", lambda _event: self.redraw())
         self._build_vehicle_parameters(controls)
         actions.pack(fill="x", pady=(9, 0))
@@ -404,10 +466,6 @@ class SimulationApp:
         self.modern_buttons.append(button)
         return button
 
-    @staticmethod
-    def _speed_options() -> tuple[float, ...]:
-        return tuple(NCAP_STANDARD_TABLE)
-
     def _combo(self, parent: ttk.Frame, label: str, variable: tk.StringVar,
                options: tuple[str, ...], width: int) -> DropdownSelect:
         field = ttk.Frame(parent, style="Panel.TFrame")
@@ -419,11 +477,14 @@ class SimulationApp:
         return combo
 
     def _numeric_entry(self, parent: ttk.Frame, label: str,
-                       variable: tk.StringVar) -> ttk.Entry:
+                       variable: tk.StringVar, *, stacked: bool = False) -> ttk.Entry:
         field = ttk.Frame(parent, style="Panel.TFrame")
         field.pack(side="left", padx=(0, 16))
-        ttk.Label(field, text=label, style="Panel.TLabel").pack(
-            side="left", padx=(0, 6))
+        caption = ttk.Label(field, text=label, style="Panel.TLabel")
+        if stacked:
+            caption.pack(anchor="w", pady=(0, 3))
+        else:
+            caption.pack(side="left", padx=(0, 6))
         entry = ttk.Entry(field, textvariable=variable,
                           style="Vehicle.TEntry", width=7)
         entry.pack(side="left")
@@ -443,7 +504,10 @@ class SimulationApp:
     def _current_run_request(self) -> TuningRequest:
         configuration = self._vehicle_configuration()
         simulation_config = replace(
-            self.engine.config, approach_s=float(self.approach_s_var.get()))
+            self.engine.config, approach_s=float(self.approach_s_var.get()),
+            speed_mps=(float(self.speed_mps_var.get())
+                       if self.mode_var.get() == "LKA"
+                       else float(self.elk_speed_kph_var.get()) / 3.6))
         vehicle_engine = configuration.build_engine(
             SimulationEngine(simulation_config, self.engine.vehicle,
                              self.road_config))
@@ -451,22 +515,71 @@ class SimulationApp:
         if self.mode_var.get() == "LKA":
             return TuningRequest(simulation_config, vehicle_engine.vehicle,
                                  "LKA", float(self.vlat_var.get()), side,
-                                 path_profile=self._selected_lka_profile(),
+                                 radius_m=float(self.radius_var.get()),
+                                 d2_m=float(self.d2_var.get()),
                                  road=self.road_config)
         scenario = self._elk_scenario_from_label(self.elk_scenario_var.get())
         intent = (LaneChangeIntent.INTENTIONAL
                   if self.intent_var.get() == "Intentional"
                   else LaneChangeIntent.UNINTENTIONAL)
-        target_motion = None
-        if scenario == ElkScenario.OVERTAKING:
-            target_motion = (TargetMotion.OVERTAKING_80
-                             if self.target_speed_var.get() == "80 km/h"
-                             else TargetMotion.OVERTAKING_72)
+        traffic = scenario in (ElkScenario.ONCOMING, ElkScenario.OVERTAKING)
+        parameters = ElkParameters(
+            radius_m=float(self.radius_var.get()), d2_m=float(self.d2_var.get()))
+        if traffic:
+            target = self._selected_target_type()
+            length_value = self.gvt_length_var.get().strip()
+            if not length_value:
+                raise ValueError("GVT Length (m) is required")
+            length, width = target.dimensions(
+                float(length_value),
+                width_m=float(self.gvt_width_var.get()))
+            wheelbase_value = self.gvt_wheelbase_var.get().strip()
+            parameters = replace(
+                parameters, gvt_speed_kph=float(self.gvt_speed_kph_var.get()),
+                gvt_marker_distance_m=float(self.gvt_marker_distance_var.get()),
+                overlap_percent=(float(self.overlap_var.get())
+                                 if scenario == ElkScenario.ONCOMING else parameters.overlap_percent),
+                gvt_length_m=length, gvt_width_m=width, gvt_type_key=target.key,
+                gvt_wheelbase_m=float(wheelbase_value) if wheelbase_value else None)
         return TuningRequest(simulation_config, vehicle_engine.vehicle,
                              "ELK", float(self.vlat_var.get()), side,
                              elk_scenario=scenario, intent=intent,
-                             target_motion=target_motion, road=self.road_config,
+                             elk_parameters=parameters, road=self.road_config,
                              safe_termination=False)
+
+    def _selected_target_type(self) -> TargetType:
+        target = next((target for target in GVT_TYPES
+                       if target.name == self.gvt_type_var.get()), None)
+        if target is None:
+            raise ValueError(f"Unknown GVT type: {self.gvt_type_var.get()}")
+        return target
+
+    def _gvt_type_changed(self, *_args: str) -> None:
+        previous = target_type(self._gvt_type_key)
+        if previous.is_custom:
+            self._custom_gvt_dimensions = (
+                self.gvt_length_var.get(), self.gvt_width_var.get(),
+                self.gvt_wheelbase_var.get())
+        elif previous.length_m is None:
+            self._confirmed_gvt_lengths[previous.key] = self.gvt_length_var.get()
+        target = self._selected_target_type()
+        self._gvt_type_key = target.key
+        if target.is_custom:
+            length, width, wheelbase = self._custom_gvt_dimensions
+        else:
+            default_length = (f"{target.default_length_m:g}"
+                              if target.default_length_m is not None else "")
+            length = (default_length if target.length_m is not None
+                      else self._confirmed_gvt_lengths.get(target.key, default_length))
+            width, wheelbase = f"{target.width_m:g}", f"{target.wheelbase_m:g}"
+        self.gvt_length_var.set(length)
+        self.gvt_width_var.set(width)
+        self.gvt_wheelbase_var.set(wheelbase)
+        self.gvt_length_entry.configure(
+            state="normal" if target.is_custom or target.length_m is None else "readonly")
+        self.gvt_width_entry.configure(state="normal" if target.is_custom else "readonly")
+        self.gvt_wheelbase_entry.configure(state="normal" if target.is_custom else "readonly")
+        self._schedule_regeneration()
 
     def _vehicle_configuration(self) -> VehicleConfiguration:
         return VehicleConfiguration(
@@ -476,11 +589,6 @@ class SimulationApp:
             body_length_m=float(self.length_var.get()),
             body_width_m=float(self.width_var.get()),
         )
-
-    def _selected_lka_profile(self) -> str:
-        return (NCAP_ALTERNATIVE_DIM
-                if self.lka_profile_var.get() == self.alternative_profile_label
-                else NCAP_STANDARD)
 
     def _stop_playback(self) -> None:
         self.playback.playing = False
@@ -515,16 +623,18 @@ class SimulationApp:
 
     def _refresh_scenario_controls(self, *, regenerate: bool) -> None:
         if self.mode_var.get() == "LKA":
+            self._set_field_visible(self.gvt_type_combo, False)
             self._set_field_visible(self.scenario_combo, False)
             self._set_field_visible(self.intent_combo, False)
-            self._set_field_visible(self.target_speed_combo, False)
+            self._set_field_visible(self.gvt_speed_entry, False)
+            self._set_field_visible(self.elk_speed_entry, False)
+            self.traffic_settings.pack_forget()
             self._set_field_visible(self.line_combo, True)
-            self._set_field_visible(self.profile_combo, True)
+            self._set_field_visible(self.d2_entry, True)
+            self._set_field_visible(self.radius_entry, True)
+            self._set_field_visible(self.vlat_entry, True)
+            self._set_field_visible(self.speed_entry, True)
             self.side_combo.configure(values=("Left", "Right"), state="readonly")
-            speed_values = tuple(f"{v:.1f}" for v in self._speed_options())
-            self.vlat_combo.configure(values=speed_values)
-            if self.vlat_var.get() not in speed_values:
-                self.vlat_var.set("0.4")
             self.line_combo.configure(state="readonly")
             self.scenario_help_var.set("Lane keeping · both departure sides")
         else:
@@ -532,28 +642,32 @@ class SimulationApp:
             overtaking = scenario == ElkScenario.OVERTAKING
             self._set_field_visible(self.scenario_combo, True)
             self._set_field_visible(self.intent_combo, overtaking)
-            self._set_field_visible(self.target_speed_combo, overtaking)
+            traffic = scenario in (ElkScenario.ONCOMING, ElkScenario.OVERTAKING)
+            self._set_field_visible(self.overlap_entry, scenario == ElkScenario.ONCOMING)
+            self._set_field_visible(self.gvt_type_combo, traffic)
+            self._set_field_visible(self.gvt_speed_entry, traffic)
+            self._set_field_visible(self.elk_speed_entry, True)
+            if traffic:
+                self.traffic_settings.pack(fill="x", pady=(8, 0))
+            else:
+                self.traffic_settings.pack_forget()
             self._set_field_visible(self.line_combo, False)
-            self._set_field_visible(self.profile_combo, False)
+            self._set_field_visible(self.d2_entry, True)
+            self._set_field_visible(self.radius_entry, True)
+            self._set_field_visible(self.vlat_entry, True)
+            self._set_field_visible(self.speed_entry, False)
             self.scenario_combo.configure(state="readonly")
             self.intent_combo.configure(state="readonly")
-            self.target_speed_combo.configure(state="readonly")
             if not overtaking:
                 self.intent_var.set("Unintentional")
             intent = (LaneChangeIntent.INTENTIONAL if self.intent_var.get() == "Intentional"
                       else LaneChangeIntent.UNINTENTIONAL)
-            motion = (TargetMotion.OVERTAKING_80 if self.target_speed_var.get() == "80 km/h"
-                      else TargetMotion.OVERTAKING_72) if overtaking else None
-            definition = elk_definition(scenario, intent=intent, target_motion=motion)
+            definition = elk_definition(scenario, intent=intent)
             side_values = tuple("Left" if side == 1 else "Right"
                                 for side in definition.allowed_sides)
             self.side_combo.configure(values=side_values, state="readonly")
             if self.side_var.get() not in side_values:
                 self.side_var.set(side_values[0])
-            speed_values = tuple(f"{value:.1f}" for value in definition.speed_options_mps)
-            self.vlat_combo.configure(values=speed_values)
-            if self.vlat_var.get() not in speed_values:
-                self.vlat_var.set(speed_values[0])
             if scenario == ElkScenario.ROAD_EDGE:
                 self.line_var.set("Solid")
             elif scenario in (ElkScenario.ONCOMING, ElkScenario.OVERTAKING):
@@ -561,17 +675,17 @@ class SimulationApp:
             else:
                 self.line_var.set("Solid")
             side_text = " / ".join(side_values)
-            traffic = (f" · GVT {self.target_speed_var.get()}"
-                       if overtaking else " · GVT 72 km/h" if scenario == ElkScenario.ONCOMING
-                       else "")
             self.scenario_help_var.set(
-                f"{definition.tested_boundary} · {side_text} departure{traffic}")
+                f"{definition.tested_boundary} · {side_text} · No ELK intervention")
         if regenerate:
-            self.regenerate()
+            self.regenerate(show_errors=False)
+            if self._layout_timer is not None:
+                self.root.after_cancel(self._layout_timer)
+            self._layout_timer = self.root.after_idle(self._fit_chart_height)
 
     @staticmethod
-    def _set_field_visible(combo: DropdownSelect, visible: bool) -> None:
-        """Show or hide a label/combobox pair without leaving an empty gap."""
+    def _set_field_visible(combo: DropdownSelect | ttk.Entry, visible: bool) -> None:
+        """Show or hide a labeled field without leaving an empty gap."""
         field = combo.master
         if visible:
             if not field.winfo_manager():
@@ -579,7 +693,16 @@ class SimulationApp:
         elif field.winfo_manager():
             field.pack_forget()
 
-    def regenerate(self) -> None:
+    def _schedule_regeneration(self, *_args: str) -> None:
+        if self._regenerate_timer is not None:
+            self.root.after_cancel(self._regenerate_timer)
+        self._regenerate_timer = self.root.after(
+            350, lambda: self.regenerate(show_errors=False))
+
+    def regenerate(self, *, show_errors: bool = True) -> None:
+        if self._regenerate_timer is not None:
+            self.root.after_cancel(self._regenerate_timer)
+            self._regenerate_timer = None
         self._stop_playback()
         try:
             request = self._current_run_request()
@@ -587,9 +710,13 @@ class SimulationApp:
             candidate_engine = SimulationEngine(request.config, request.vehicle,
                                                 request.road)
         except (ValueError, ArithmeticError) as error:
-            LOGGER.exception("Could not generate LSS simulation")
-            messagebox.showerror("Simulation error", str(error), parent=self.root)
+            self._generation_error = str(error)
+            LOGGER.warning("Could not generate LSS simulation: %s", error)
+            self.redraw()
+            if show_errors:
+                messagebox.showerror("Simulation error", str(error), parent=self.root)
             return
+        self._generation_error = None
         self.run_data = candidate
         self.engine = candidate_engine
         self.simulation_config = candidate_engine.config
@@ -611,6 +738,8 @@ class SimulationApp:
         self._export_csv(profile_only=True)
 
     def _export_csv(self, *, profile_only: bool) -> None:
+        if not self._ensure_current_run():
+            return
         filename = filedialog.asksaveasfilename(
             parent=self.root, defaultextension=".csv",
             initialdir=str(user_export_dir()),
@@ -635,6 +764,8 @@ class SimulationApp:
         if self.playback.playing:
             self._stop_playback()
             return
+        if not self._ensure_current_run():
+            return
         if self.playback.index == self.playback.frame_count - 1:
             self.playback.index = 0
             self._follow_selected_time()
@@ -643,6 +774,14 @@ class SimulationApp:
         self.playback_clock.start(self.playback.index, time.monotonic())
         self.play_button.set_text("Ⅱ  Pause")
         self._tick()
+
+    def _ensure_current_run(self) -> bool:
+        if self._regenerate_timer is not None:
+            self.regenerate(show_errors=False)
+        if self._generation_error is not None:
+            messagebox.showerror("Simulation parameters", self._generation_error, parent=self.root)
+            return False
+        return True
 
     def _tick(self) -> None:
         self._timer = None
@@ -687,7 +826,7 @@ class SimulationApp:
         self.timeline_inspection_var.set(
             f"Time {sample.time_s:.3f} s  ·  SWA {sample.steering_command_deg:+.2f}°"
             f" / NCAP {sample.reference_steering_wheel_deg:+.2f}°"
-            f"  ·  Vlat {sample.v_lat_mps:+.3f} / area {sample.v_lat_from_steering_mps:+.3f} m/s"
+            f"  ·  Vlat {sample.v_lat_mps:+.3f} / NCAP {sample.reference_v_lat_mps:+.3f} m/s"
             f"  ·  y ref {sample.reference_y_m:+.3f} / sim {sample.front_y_m:+.3f}"
             f" / error {sample.lateral_error_m:+.3f} m")
 
@@ -730,8 +869,18 @@ class SimulationApp:
             self.status_var.set(
                 self.status_var.get()
                 + f"   |   Collision at {run.collision_time_s:.6f} s · scenario terminated")
+        if self._generation_error is not None:
+            self.status_var.set(
+                f"Invalid parameters: {self._generation_error}. "
+                "Showing last valid run.   |   " + self.status_var.get())
 
     def close(self) -> None:
+        if self._layout_timer is not None:
+            self.root.after_cancel(self._layout_timer)
+            self._layout_timer = None
+        if self._regenerate_timer is not None:
+            self.root.after_cancel(self._regenerate_timer)
+            self._regenerate_timer = None
         self._stop_playback()
         self.root.destroy()
 

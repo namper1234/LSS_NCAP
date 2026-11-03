@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import math
 
-from ..config import NCAP_PATH, SIMULATION, SimulationConfig
+from ..config import NCAP_PATH, SIMULATION, VEHICLE, SimulationConfig
+from ..targets import target_type
 from .lka import NcapPath
 
 
@@ -54,6 +56,54 @@ class ElkExecutionTolerances:
 
 
 ELK_EXECUTION_TOLERANCES = ElkExecutionTolerances()
+
+
+@dataclass(frozen=True, slots=True)
+class ElkParameters:
+    """Exploratory ELK inputs; GVT offset is its centre to the marker inner edge."""
+
+    radius_m: float = SIMULATION.path_radius_m
+    d2_m: float = SIMULATION.lka_d2_m
+    gvt_speed_kph: float = 72.0
+    gvt_marker_distance_m: float = 1.5
+    overlap_percent: float = 10.0
+    gvt_length_m: float = VEHICLE.body_length_m
+    gvt_width_m: float = VEHICLE.body_width_m
+    gvt_type_key: str | None = None
+    gvt_wheelbase_m: float | None = None
+
+    def __post_init__(self) -> None:
+        positive = (self.radius_m, self.gvt_speed_kph,
+                    self.gvt_length_m, self.gvt_width_m)
+        if not all(math.isfinite(value) and value > 0 for value in positive):
+            raise ValueError("ELK radius, GVT speed, length, and width must be finite and positive")
+        if not all(math.isfinite(value) and value >= 0
+                   for value in (self.d2_m, self.gvt_marker_distance_m)):
+            raise ValueError("ELK d2 and GVT marker distance must be finite and nonnegative")
+        if not math.isfinite(self.overlap_percent) or not 0 <= self.overlap_percent <= 100:
+            raise ValueError("Target overlap must be between 0 and 100 percent of VUT width")
+        if self.gvt_type_key is not None:
+            target = target_type(self.gvt_type_key)
+            length, width = target.dimensions(self.gvt_length_m, width_m=self.gvt_width_m)
+            if not math.isclose(self.gvt_width_m, width) or not math.isclose(self.gvt_length_m, length):
+                raise ValueError(f"{target.name} requires its catalogue length and width")
+            if (not target.is_custom and self.gvt_wheelbase_m is not None
+                    and not math.isclose(self.gvt_wheelbase_m, target.wheelbase_m)):
+                raise ValueError(f"{target.name} wheelbase is fixed at {target.wheelbase_m:g} m")
+        wheelbase = self.resolved_gvt_wheelbase_m
+        if wheelbase is not None and (
+                not math.isfinite(wheelbase) or not 0 < wheelbase < self.gvt_length_m):
+            raise ValueError("GVT wheelbase must be finite, positive, and less than GVT length")
+
+    @property
+    def resolved_gvt_wheelbase_m(self) -> float | None:
+        if self.gvt_wheelbase_m is not None:
+            return self.gvt_wheelbase_m
+        if self.gvt_type_key is not None:
+            target = target_type(self.gvt_type_key)
+            if not target.is_custom:
+                return target.wheelbase_m
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +159,8 @@ class ElkPath(NcapPath):
     def __init__(self, lateral_speed: float, side: int,
                  scenario: ElkScenario | str,
                  intent: LaneChangeIntent | str = LaneChangeIntent.UNINTENTIONAL,
-                 config: SimulationConfig = SIMULATION) -> None:
+                 config: SimulationConfig = SIMULATION, *,
+                 parameters: ElkParameters | None = ElkParameters()) -> None:
         self.elk_scenario = ElkScenario(scenario)
         self.intent = LaneChangeIntent(intent)
         definition = elk_definition(self.elk_scenario, intent=self.intent)
@@ -117,6 +168,10 @@ class ElkPath(NcapPath):
             sides = " and ".join("left" if value == 1 else "right"
                                  for value in definition.allowed_sides)
             raise ValueError(f"{definition.label} permits {sides} departure only")
+        if parameters is not None:
+            super().__init__(lateral_speed, side, config=config,
+                             radius_m=parameters.radius_m, d2_m=parameters.d2_m)
+            return
         if lateral_speed not in definition.speed_options_mps:
             allowed = ", ".join(f"{value:.1f}" for value in definition.speed_options_mps)
             raise ValueError(f"{definition.label} V_lat must be one of {allowed} m/s")

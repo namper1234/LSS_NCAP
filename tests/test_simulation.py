@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from lss_ncap.config import (NCAP_ALTERNATIVE_DIM, NCAP_ALTERNATIVE_DIM_TABLE,
-                             NCAP_PATH, NCAP_STANDARD_TABLE, RoadConfig,
+                             NCAP_PATH, NCAP_STANDARD, NCAP_STANDARD_TABLE, RoadConfig,
                              SimulationConfig, VehicleParams)
 from lss_ncap.export import export_run, export_swa_profile, save_csv
 from lss_ncap.scenarios.elka import ElkaInterventionPolicy
@@ -136,9 +136,9 @@ class SimulationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RoadConfig(marking_width_m=float("nan"))
         with self.assertRaises(ValueError):
-            NcapPath(1.1, 1)
+            NcapPath(20.0, 1)
         with self.assertRaises(ValueError):
-            NcapPath(0.4, 1, radius_m=800.0)
+            NcapPath(0.4, 1, profile=NCAP_STANDARD, radius_m=800.0)
         with self.assertRaises(ValueError):
             NcapPath(0.4, 0)
 

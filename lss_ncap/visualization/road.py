@@ -7,9 +7,12 @@ from dataclasses import replace
 
 from ..config import ROAD, SIMULATION, VEHICLE, RoadConfig, SimulationConfig, VehicleParams
 from ..simulation import SimulationRun
+from ..collision import ego_polygon, target_polygon, vehicle_rectangle
+from ..targets import CUSTOM_TARGET_TYPE, TARGET_TYPES
 from ..ui.theme import ThemeMode, UiPalette, palette_for
 from ..ui.typography import TYPE_SCALE, ui_font
 from .geometry import RoadViewport
+from .targets import target_image
 from .vehicle import (EGO_STYLE, GVT_SPRITE_PATH, TARGET_STYLE,
                       SpriteCarPainter)
 
@@ -23,6 +26,11 @@ class RoadRenderer:
         self.palette = palette or palette_for(ThemeMode.DARK)
         self.ego_vehicle_painter = SpriteCarPainter()
         self.target_vehicle_painter = SpriteCarPainter(GVT_SPRITE_PATH)
+        self.target_type_painters = {
+            target.key: SpriteCarPainter(source_image=target_image(target))
+            for target in TARGET_TYPES
+        }
+        self.target_type_painters[CUSTOM_TARGET_TYPE.key] = self.target_vehicle_painter
 
     def set_palette(self, palette: UiPalette) -> None:
         self.palette = palette
@@ -30,10 +38,11 @@ class RoadRenderer:
     def draw(self, canvas: tk.Canvas, run: SimulationRun, index: int,
              lane_width_m: float, line_style: str) -> None:
         self.vehicle = run.vehicle
+        self.road = run.road
         canvas.delete("all")
         sample, path = run.samples[index], run.path
         width, height = max(canvas.winfo_width(), 1), max(canvas.winfo_height(), 1)
-        divider_y = path.side * (path.line_offset_m + self.vehicle.body_width_m / 2)
+        divider_y = path.side * run.initial_lane_marker_distance_m
         # A road edge should read as a shoulder, not as half a canvas of grass.
         # Move the tested boundary lower while keeping the exact metre scale.
         viewport_road = (replace(self.road, divider_y_fraction=0.68)
@@ -95,7 +104,7 @@ class RoadRenderer:
         x_min, x_max = view.visible_x_range()
         first = max(0, int(x_min * 2))
         last = max(first + 1, int(x_max * 2))
-        reference = [screen(*path.at(j * 0.5)[:2]) for j in range(first, last)]
+        reference = [screen(*path.at_x(j * 0.5)[:2]) for j in range(first, last)]
         if len(reference) > 1:
             canvas.create_line(*[v for point in reference for v in point],
                                fill="#e88a63", width=2, smooth=True)
@@ -104,8 +113,39 @@ class RoadRenderer:
         if len(trail) > 1:
             canvas.create_line(*[v for point in trail for v in point],
                                fill=self.palette.cyan, width=2, smooth=True)
+        if run.no_intervention_samples and run.elk_intervention_time_s is not None:
+            baseline_trail = [
+                screen(point.front_x_m, point.front_y_m)
+                for point in run.no_intervention_samples[max(0, index - 300):index + 1:3]
+            ]
+            if len(baseline_trail) > 1:
+                canvas.create_line(
+                    *[coordinate for point in baseline_trail for coordinate in point],
+                    fill=self.palette.magenta, width=2, dash=(3, 4))
 
         if run.target_samples:
+            target_vehicle = run.target_vehicle or run.vehicle
+            if run.nominal_encounter is not None:
+                nominal = run.nominal_encounter
+                yaw = nominal.vut_yaw_rad
+                vut_centre_x = nominal.vut_front_x_m - run.vehicle.l_front_m * math.cos(yaw)
+                vut_centre_y = nominal.vut_front_y_m - run.vehicle.l_front_m * math.sin(yaw)
+                for cx, cy, angle, vehicle in (
+                    (vut_centre_x, vut_centre_y, math.degrees(yaw), run.vehicle),
+                    (nominal.target_x_m, nominal.path_y_m, 0.0, target_vehicle),
+                ):
+                    corners = [screen(*point) for point in vehicle_rectangle(
+                        cx, cy, angle, vehicle.body_length_m, vehicle.body_width_m)]
+                    canvas.create_polygon(
+                        *[coordinate for point in corners for coordinate in point],
+                        fill="", outline=self.palette.orange, dash=(4, 4), width=2)
+                near_y = nominal.path_y_m - path.side * target_vehicle.body_width_m / 2
+                overlap_end_y = near_y + path.side * nominal.overlap_m
+                x_px, y0 = screen(nominal.vut_reference_x_m, near_y)
+                _, y1 = screen(nominal.vut_reference_x_m, overlap_end_y)
+                if run.scenario_key == "oncoming":
+                    canvas.create_line(x_px, y0, x_px, y1,
+                                       fill=self.palette.orange, width=5)
             target_trail = [screen(target.x_m, target.y_m)
                             for target in run.target_samples[:index + 1:3]]
             if len(target_trail) > 1:
@@ -113,11 +153,14 @@ class RoadRenderer:
                     *[coordinate for point in target_trail for coordinate in point],
                     fill=self.palette.green, width=2, dash=(5, 3), smooth=True)
             target_sample = run.target_samples[index]
-            target_outline = self.target_vehicle_painter.draw(
+            painter = self.target_vehicle_painter
+            if run.elk_parameters is not None and run.elk_parameters.gvt_type_key is not None:
+                painter = self.target_type_painters[run.elk_parameters.gvt_type_key]
+            target_outline = painter.draw(
                 canvas, view, center_x_m=target_sample.x_m,
                 center_y_m=target_sample.y_m, yaw_deg=target_sample.yaw_deg,
-                length_m=self.vehicle.body_length_m,
-                width_m=self.vehicle.body_width_m,
+                length_m=target_vehicle.body_length_m,
+                width_m=target_vehicle.body_width_m,
                 style=TARGET_STYLE, label=target_sample.label)
             self._draw_target_locator(
                 canvas, view, sample.front_x_m, target_sample.x_m,
@@ -130,12 +173,28 @@ class RoadRenderer:
             canvas, view, center_x_m=ego_center_x, center_y_m=ego_center_y,
             yaw_deg=sample.yaw_deg, length_m=self.vehicle.body_length_m,
             width_m=self.vehicle.body_width_m, style=EGO_STYLE)
+        if run.collision_detected and index == len(run.samples) - 1 and run.target_samples:
+            for polygon in (
+                    ego_polygon(sample, run.vehicle),
+                    target_polygon(run.target_samples[index], run.target_vehicle or run.vehicle)):
+                corners = [screen(*point) for point in polygon]
+                canvas.create_polygon(
+                    *[value for point in corners for value in point],
+                    fill="", outline="#ff5757", width=2)
+            if run.collision_point_m is not None:
+                contact_x, contact_y = screen(*run.collision_point_m)
+                canvas.create_oval(contact_x - 4, contact_y - 4, contact_x + 4, contact_y + 4,
+                                   fill="#ff5757", outline="#ffffff", width=2)
+                canvas.create_text(
+                    contact_x, contact_y - 9 if contact_y + 25 > height - 40 else contact_y + 9,
+                    anchor="s" if contact_y + 25 > height - 40 else "n", text="First contact",
+                    fill="#ff5757", font=ui_font(TYPE_SCALE.label))
         axle_x, axle_y = screen(sample.front_x_m, sample.front_y_m)
         canvas.create_oval(axle_x - 3, axle_y - 3, axle_x + 3, axle_y + 3,
                            fill="#5ba8ef", outline="#e2e9ee")
-
         legend_y = height - 24
-        legend_right = 470 if run.target_samples else 334
+        legend_right = (650 if run.no_intervention_samples and run.elk_intervention_time_s is not None
+                        else 470 if run.target_samples else 334)
         canvas.create_rectangle(14, legend_y - 15, legend_right, legend_y + 15,
                                 fill=self.palette.panel, outline=self.palette.border)
         canvas.create_line(22, legend_y, 45, legend_y, fill="#e88a63", width=3)
@@ -151,6 +210,11 @@ class RoadRenderer:
             canvas.create_text(356, legend_y, anchor="w",
                                fill=self.palette.foreground,
                                font=ui_font(TYPE_SCALE.label), text="GVT path")
+        if run.no_intervention_samples and run.elk_intervention_time_s is not None:
+            canvas.create_line(490, legend_y, 513, legend_y,
+                               fill=self.palette.magenta, width=2, dash=(3, 4))
+            canvas.create_text(520, legend_y, anchor="w", fill=self.palette.foreground,
+                               font=ui_font(TYPE_SCALE.label), text="No-ELK VUT")
 
     def _draw_target_locator(
             self, canvas: tk.Canvas, view: RoadViewport, ego_x_m: float,

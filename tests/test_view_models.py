@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from lss_ncap.config import ROAD
+from lss_ncap.collision import ego_polygon
 from lss_ncap.simulation import SimulationEngine
-from lss_ncap.scenarios.elk import ElkScenario
+from lss_ncap.scenarios.elk import ElkParameters, ElkScenario
 from lss_ncap.ui.playback import PlaybackClock, PlaybackState
 from lss_ncap.ui.chart_interaction import ChartView
 from lss_ncap.ui.telemetry import telemetry_view
@@ -57,6 +59,21 @@ class RecordingCanvas:
 
 
 class ViewModelTests(unittest.TestCase):
+    def test_initial_longitudinal_readout_uses_both_body_centres(self) -> None:
+        for scenario in (ElkScenario.ONCOMING, ElkScenario.OVERTAKING):
+            run = SimulationEngine().run_elk(scenario)
+            for yaw_deg in (0.0, 30.0, -45.0):
+                with self.subTest(scenario=scenario, yaw_deg=yaw_deg):
+                    initial_vut = replace(run.samples[0], front_x_m=7.0, yaw_deg=yaw_deg)
+                    changed = replace(run, samples=(initial_vut,) + run.samples[1:])
+                    vut_center_x = sum(x for x, _ in ego_polygon(initial_vut, run.vehicle)) / 4
+                    expected_dx = run.target_samples[0].x_m - vut_center_x
+                    label = f"Initial centre dx {expected_dx:+.2f} m"
+                    for index in (0, len(changed.samples) - 1):
+                        text = telemetry_view(changed, index).target
+                        self.assertIn(label, text)
+                        self.assertNotIn("Initial x ", text)
+
     @staticmethod
     def _contrast_ratio(first: str, second: str) -> float:
         def luminance(color: str) -> float:
@@ -174,9 +191,9 @@ class ViewModelTests(unittest.TestCase):
         overtaking = SimulationEngine().run_elk(
             ElkScenario.OVERTAKING, 0.4, safe_termination=False)
         synchronization = telemetry_view(overtaking, 0).target
-        self.assertIn("GVT front", synchronization)
-        self.assertIn("VUT rear axle", synchronization)
-        self.assertIn("Δx +0.0000 m", synchronization)
+        self.assertIn("Nominal Encounter Time", synchronization)
+        self.assertIn("Longitudinal Synchronization Error", synchronization)
+        self.assertIn("Longitudinal Synchronization Error: +0.000000 m", synchronization)
 
         initial_canvas = RecordingCanvas(width=1120, height=260)
         renderer.draw(initial_canvas, oncoming, 0, 3.5, "Dashed")
@@ -230,6 +247,35 @@ class ViewModelTests(unittest.TestCase):
         self.assertGreater(len(white), 1)
         self.assertTrue(all(kw["width"] == expected_width for kw in yellow + white))
         self.assertGreaterEqual(len(canvas.polygons), 2)  # shadow and car body
+
+    def test_overtaking_outlines_show_nominal_time_without_moving_impact_vehicles(self) -> None:
+        run = SimulationEngine().run_elk("overtaking", parameters=ElkParameters())
+        nominal = run.nominal_encounter
+        assert nominal is not None and run.collision_time_s is not None
+        gap = nominal.time_s - run.collision_time_s
+        self.assertLess(abs(gap), 0.001)
+        self.assertLess(abs(nominal.vut_front_x_m - run.samples[-1].front_x_m), 0.02)
+        self.assertLess(abs(nominal.target_x_m - run.target_samples[-1].x_m), 0.02)
+        samples, targets = run.samples, run.target_samples
+        canvas = RecordingCanvas()
+        RoadRenderer().draw(canvas, run, len(samples) - 1, 3.5, "Dashed")
+        text = " ".join(canvas.texts)
+        self.assertNotIn("No-ELK encounter", text)
+        self.assertNotIn("Orange outlines:", text)
+        self.assertTrue(any(style.get("outline") == RoadRenderer().palette.orange
+                            and style.get("dash") == (4, 4)
+                            for _, style in canvas.polygons))
+        self.assertIn("First contact", text)
+        telemetry = telemetry_view(run, len(samples) - 1)
+        self.assertIn("Actual Collision Time", telemetry.target)
+        self.assertEqual(telemetry.collision_status, "COLLISION DETECTED")
+        self.assertIs(run.samples, samples)
+        self.assertIs(run.target_samples, targets)
+        RoadRenderer().draw(canvas, run, 0, 3.5, "Dashed")
+        self.assertNotIn("earlier", " ".join(canvas.texts))
+        self.assertNotIn("after impact", telemetry_view(run, 0).target)
+        self.assertIsNone(replace(run, collision_time_s=None).collision_before_nominal_s)
+        self.assertIsNone(replace(run, collision_time_s=nominal.time_s + 1).collision_before_nominal_s)
 
     def test_vehicle_footprint_uses_configured_dimensions(self) -> None:
         run = SimulationEngine().run_lka()

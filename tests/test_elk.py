@@ -32,14 +32,14 @@ class ElkScenarioTests(unittest.TestCase):
 
     def test_intentional_overtaking_uses_protocol_800m_path(self) -> None:
         path = ElkPath(0.6, 1, ElkScenario.OVERTAKING,
-                       LaneChangeIntent.INTENTIONAL)
+                       LaneChangeIntent.INTENTIONAL, parameters=None)
         self.assertEqual(path.radius_m, 800.0)
         self.assertEqual((path.psi_deg, path.d1_table, path.d2),
                          (1.72, 0.36, 0.60))
 
     def test_nontraffic_scenarios_have_no_target(self) -> None:
         for scenario in (ElkScenario.ROAD_EDGE, ElkScenario.SOLID_LINE):
-            run = self.engine.run_elk(scenario, 0.4)
+            run = self.engine.run_elk(scenario, 0.4, parameters=None)
             self.assertEqual(run.mode, "ELK")
             self.assertFalse(run.target_samples)
 
@@ -60,7 +60,7 @@ class ElkScenarioTests(unittest.TestCase):
                                       speed=speed, motion=motion):
                         run = self.engine.run_elk(
                             scenario, speed, intent=intent,
-                            target_motion=motion)
+                            target_motion=motion, parameters=None)
                         self.assertTrue(run.target_samples)
                         self.assertIsNotNone(run.predicted_collision_time_s)
                         if scenario == ElkScenario.OVERTAKING:
@@ -71,7 +71,7 @@ class ElkScenarioTests(unittest.TestCase):
                                                run.nominal_sync_time_s)
 
     def test_oncoming_initial_location_and_nominal_10_percent_overlap(self) -> None:
-        run = self.engine.run_elk(ElkScenario.ONCOMING, 0.4)
+        run = self.engine.run_elk(ElkScenario.ONCOMING, 0.4, parameters=None)
         self.assertEqual(len(run.target_samples), len(run.samples))
         initial, last = run.target_samples[0], run.target_samples[-1]
         self.assertEqual(initial.yaw_deg, 180.0)
@@ -108,7 +108,7 @@ class ElkScenarioTests(unittest.TestCase):
                               (TargetMotion.OVERTAKING_80, 80 / 3.6)):
             with self.subTest(motion=motion):
                 run = self.engine.run_elk(ElkScenario.OVERTAKING, 0.4,
-                                          target_motion=motion)
+                                          target_motion=motion, parameters=None)
                 initial, last = run.target_samples[0], run.target_samples[-1]
                 self.assertAlmostEqual(initial.speed_mps, speed)
                 self.assertGreater(last.x_m, initial.x_m)
@@ -198,7 +198,7 @@ class ElkScenarioTests(unittest.TestCase):
         run = self.engine.run_elk(
             ElkScenario.OVERTAKING, 0.5,
             intent=LaneChangeIntent.INTENTIONAL,
-            target_motion=TargetMotion.OVERTAKING_80)
+            target_motion=TargetMotion.OVERTAKING_80, parameters=None)
         self.assertAlmostEqual(run.turn_signal_time_s,
                                run.reference_arc_start_s - 1.0)
 
@@ -209,7 +209,7 @@ class ElkScenarioTests(unittest.TestCase):
             return math.radians(-4.0) if state.time_s >= intervention_s else None
 
         run = self.engine.run_elk(ElkScenario.ONCOMING, 0.4,
-                                  lane_support=support)
+                                  lane_support=support, parameters=None)
         self.assertAlmostEqual(run.robot_release_time_s,
                                intervention_s - 5.0 / run.config.speed_mps)
         released = [sample for sample in run.samples

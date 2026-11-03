@@ -24,10 +24,12 @@ RADIUS_M = SIMULATION.path_radius_m
 
 
 def generate(lateral_speed: float = 0.4, side: int = 1,
-             params: VehicleParams | None = None
+             params: VehicleParams | None = None, *,
+             radius_m: float | None = None, d2_m: float | None = None
              ) -> tuple[NcapPath, list[dict[str, float | str]]]:
     """Compatibility wrapper returning the original path-and-row pair."""
-    run = SimulationEngine(vehicle=params or VehicleParams()).run_lka(lateral_speed, side)
+    run = SimulationEngine(vehicle=params or VehicleParams()).run_lka(
+        lateral_speed, side, radius_m=radius_m, d2_m=d2_m)
     return cast(NcapPath, run.path), run.rows()
 
 

@@ -1,6 +1,7 @@
 """Application-wide light/dark palettes and ttk style configuration."""
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from dataclasses import dataclass
 from enum import Enum
@@ -59,6 +60,64 @@ def palette_for(mode: ThemeMode | str) -> UiPalette:
     return PALETTES[ThemeMode(mode)]
 
 
+def _blend(first: str, second: str, amount: float) -> str:
+    channels = zip((int(first[i:i + 2], 16) for i in (1, 3, 5)),
+                   (int(second[i:i + 2], 16) for i in (1, 3, 5)))
+    return "#" + "".join(f"{round(a + (b - a) * amount):02x}"
+                         for a, b in channels)
+
+
+def _entry_image(root: tk.Tk, palette: UiPalette, focus: float) -> tk.PhotoImage:
+    """Draw a scalable rounded field with a soft border and focus halo."""
+    size = 14
+    image = tk.PhotoImage(master=root, width=size, height=size)
+    border = _blend(palette.border, palette.accent, focus * 0.75)
+    border = _blend(palette.panel_alt, border, 0.68)
+    halo = _blend(palette.panel_alt, palette.accent, focus * 0.25)
+    center = (size - 1) / 2
+    for y in range(size):
+        row = []
+        for x in range(size):
+            dx = abs(x - center) - 2
+            dy = abs(y - center) - 2
+            distance = (math.hypot(max(dx, 0), max(dy, 0))
+                        + min(max(dx, dy), 0) - 4.5)
+            if distance > 1.2:
+                row.append("")
+            elif distance > 0.1:
+                row.append(halo if focus else "")
+            elif distance > -1.1:
+                row.append(border)
+            else:
+                row.append(palette.panel_alt)
+        for x, color in enumerate(row):
+            if color:
+                image.put(color, to=(x, y))
+    return image
+
+
+def _configure_numeric_entries(root: tk.Tk, style: ttk.Style,
+                               mode: ThemeMode, palette: UiPalette) -> None:
+    images = getattr(root, "_numeric_entry_images", {})
+    if mode not in images:
+        images[mode] = tuple(_entry_image(root, palette, step / 4)
+                             for step in range(5))
+        root._numeric_entry_images = images
+    for step, image in enumerate(images[mode]):
+        element = f"VehicleRounded{mode.value}{step}.field"
+        if element not in style.element_names():
+            style.element_create(element, "image", image, border=4,
+                                 sticky="nswe")
+        name = "Vehicle.TEntry" if step == 0 else f"VehicleFocus{step}.TEntry"
+        style.layout(name, [(element, {"sticky": "nswe", "children": [
+            ("Entry.padding", {"sticky": "nswe", "children": [
+                ("Entry.textarea", {"sticky": "nswe"})]})]})])
+        style.configure(name, fieldbackground=palette.panel_alt,
+                        foreground=palette.foreground,
+                        insertcolor=palette.foreground, padding=(6, 4),
+                        font=ui_font(TYPE_SCALE.body, "bold"))
+
+
 def apply_theme(root: tk.Tk, mode: ThemeMode | str = ThemeMode.DARK) -> UiPalette:
     """Apply a complete palette and return it for canvas-based components."""
     selected_mode = ThemeMode(mode)
@@ -110,11 +169,7 @@ def apply_theme(root: tk.Tk, mode: ThemeMode | str = ThemeMode.DARK) -> UiPalett
     style.configure("VehicleUnit.TLabel", background=palette.panel_alt,
                     foreground=palette.accent_text,
                     font=ui_font(TYPE_SCALE.caption, "bold"))
-    style.configure("Vehicle.TEntry", fieldbackground=palette.panel_alt,
-                    foreground=palette.foreground, bordercolor=palette.border,
-                    insertcolor=palette.foreground, padding=(8, 6),
-                    font=ui_font(TYPE_SCALE.body, "bold"))
-    style.map("Vehicle.TEntry", bordercolor=[("focus", palette.accent)])
+    _configure_numeric_entries(root, style, selected_mode, palette)
     style.configure("Dashboard.TButton", background=palette.panel_alt,
                     foreground=palette.foreground, borderwidth=0, padding=(12, 7),
                     font=ui_font(TYPE_SCALE.label, "bold"))

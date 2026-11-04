@@ -19,6 +19,7 @@ from ..scenarios.elk import (ELK_SCENARIOS, ElkParameters, ElkScenario, LaneChan
 from ..simulation import SimulationEngine, SimulationRun
 from ..targets import (CUSTOM_TARGET_TYPE, DEFAULT_TARGET_TYPE, GVT_TYPES,
                        TargetType, target_type)
+from ..vehicle_configuration import VehicleConfiguration
 from ..visualization.chart import (LateralVelocityChartRenderer,
                                    LateralTrajectoryChartRenderer,
                                    SteeringAngleChartRenderer)
@@ -29,9 +30,8 @@ from .chart_interaction import ChartInteractionController, ChartView
 from .telemetry import telemetry_view
 from .theme import ThemeMode, apply_theme
 from .typography import TYPE_SCALE, ui_font
-from .vehicle_configuration import VehicleConfiguration
 from .vehicle_panel import VehicleParametersPanel
-from .widgets import DropdownSelect, ExpandButton, ModernButton
+from .widgets import DropdownSelect, ExpandButton, ModernButton, NumericEntry
 
 LOGGER = logging.getLogger(__name__)
 
@@ -161,6 +161,11 @@ class SimulationApp:
                 canvas.configure(height=height)
 
     def _build_ui(self) -> None:
+        self._build_controls()
+        self._build_road_panel()
+        self._build_charts_and_timeline()
+
+    def _build_controls(self) -> None:
         controls = ttk.Frame(self.root, padding=(18, 10), style="Card.TFrame")
         self.controls_panel = controls
         controls.pack(fill="x", padx=12, pady=(10, 8))
@@ -250,6 +255,8 @@ class SimulationApp:
         self.theme_button = self._modern_button(
             actions, "☀  Light mode", self.toggle_theme)
         self.theme_button.pack(side="right", padx=(12, 0))
+
+    def _build_road_panel(self) -> None:
         road_panel = ttk.Frame(self.root, padding=1, style="Card.TFrame")
         self.road_panel = road_panel
         road_panel.pack(fill="both", expand=True, padx=12)
@@ -278,6 +285,7 @@ class SimulationApp:
         self.road_canvas.pack(fill="both", expand=True)
         self._expand_button(self.road_canvas, "road")
 
+    def _build_charts_and_timeline(self) -> None:
         charts = ttk.Frame(self.root, style="Dashboard.TFrame")
         self.charts_panel = charts
         charts.rowconfigure(0, weight=1)
@@ -477,7 +485,7 @@ class SimulationApp:
         return combo
 
     def _numeric_entry(self, parent: ttk.Frame, label: str,
-                       variable: tk.StringVar, *, stacked: bool = False) -> ttk.Entry:
+                       variable: tk.StringVar, *, stacked: bool = False) -> NumericEntry:
         field = ttk.Frame(parent, style="Panel.TFrame")
         field.pack(side="left", padx=(0, 16))
         caption = ttk.Label(field, text=label, style="Panel.TLabel")
@@ -485,8 +493,7 @@ class SimulationApp:
             caption.pack(anchor="w", pady=(0, 3))
         else:
             caption.pack(side="left", padx=(0, 6))
-        entry = ttk.Entry(field, textvariable=variable,
-                          style="Vehicle.TEntry", width=7)
+        entry = NumericEntry(field, textvariable=variable, width=7)
         entry.pack(side="left")
         entry.bind("<Return>", lambda _event: self.regenerate())
         entry.bind("<FocusOut>", lambda _event: self.regenerate())
@@ -522,30 +529,33 @@ class SimulationApp:
         intent = (LaneChangeIntent.INTENTIONAL
                   if self.intent_var.get() == "Intentional"
                   else LaneChangeIntent.UNINTENTIONAL)
-        traffic = scenario in (ElkScenario.ONCOMING, ElkScenario.OVERTAKING)
-        parameters = ElkParameters(
-            radius_m=float(self.radius_var.get()), d2_m=float(self.d2_var.get()))
-        if traffic:
-            target = self._selected_target_type()
-            length_value = self.gvt_length_var.get().strip()
-            if not length_value:
-                raise ValueError("GVT Length (m) is required")
-            length, width = target.dimensions(
-                float(length_value),
-                width_m=float(self.gvt_width_var.get()))
-            wheelbase_value = self.gvt_wheelbase_var.get().strip()
-            parameters = replace(
-                parameters, gvt_speed_kph=float(self.gvt_speed_kph_var.get()),
-                gvt_marker_distance_m=float(self.gvt_marker_distance_var.get()),
-                overlap_percent=(float(self.overlap_var.get())
-                                 if scenario == ElkScenario.ONCOMING else parameters.overlap_percent),
-                gvt_length_m=length, gvt_width_m=width, gvt_type_key=target.key,
-                gvt_wheelbase_m=float(wheelbase_value) if wheelbase_value else None)
         return TuningRequest(simulation_config, vehicle_engine.vehicle,
                              "ELK", float(self.vlat_var.get()), side,
                              elk_scenario=scenario, intent=intent,
-                             elk_parameters=parameters, road=self.road_config,
-                             safe_termination=False)
+                             elk_parameters=self._elk_parameters(scenario),
+                             road=self.road_config, safe_termination=False)
+
+    def _elk_parameters(self, scenario: ElkScenario) -> ElkParameters:
+        """Read the visible ELK controls into validated scenario parameters."""
+        traffic = scenario in (ElkScenario.ONCOMING, ElkScenario.OVERTAKING)
+        parameters = ElkParameters(
+            radius_m=float(self.radius_var.get()), d2_m=float(self.d2_var.get()))
+        if not traffic:
+            return parameters
+        target = self._selected_target_type()
+        length_value = self.gvt_length_var.get().strip()
+        if not length_value:
+            raise ValueError("GVT Length (m) is required")
+        length, width = target.dimensions(
+            float(length_value), width_m=float(self.gvt_width_var.get()))
+        wheelbase_value = self.gvt_wheelbase_var.get().strip()
+        return replace(
+            parameters, gvt_speed_kph=float(self.gvt_speed_kph_var.get()),
+            gvt_marker_distance_m=float(self.gvt_marker_distance_var.get()),
+            overlap_percent=(float(self.overlap_var.get())
+                             if scenario == ElkScenario.ONCOMING else parameters.overlap_percent),
+            gvt_length_m=length, gvt_width_m=width, gvt_type_key=target.key,
+            gvt_wheelbase_m=float(wheelbase_value) if wheelbase_value else None)
 
     def _selected_target_type(self) -> TargetType:
         target = next((target for target in GVT_TYPES
@@ -684,7 +694,7 @@ class SimulationApp:
             self._layout_timer = self.root.after_idle(self._fit_chart_height)
 
     @staticmethod
-    def _set_field_visible(combo: DropdownSelect | ttk.Entry, visible: bool) -> None:
+    def _set_field_visible(combo: DropdownSelect | NumericEntry, visible: bool) -> None:
         """Show or hide a labeled field without leaving an empty gap."""
         field = combo.master
         if visible:

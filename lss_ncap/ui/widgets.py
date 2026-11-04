@@ -4,9 +4,46 @@ from __future__ import annotations
 import tkinter as tk
 import tkinter.font as tkfont
 from collections.abc import Callable, Mapping
+from tkinter import ttk
 
 from .theme import UiPalette
 from .typography import TYPE_SCALE, ui_font
+
+
+class NumericEntry(ttk.Entry):
+    """Standard entry behavior with a gently animated focus border."""
+
+    def __init__(self, parent: tk.Misc, *, textvariable: tk.StringVar,
+                 width: int) -> None:
+        super().__init__(parent, textvariable=textvariable,
+                         style="Vehicle.TEntry", width=width)
+        self._focus_step = 0
+        self._focus_timer: str | None = None
+        self.bind("<FocusIn>", self._focus_changed)
+        self.bind("<FocusOut>", self._focus_changed)
+        self.bind("<Destroy>", self._cancel_focus_timer)
+
+    def _focus_changed(self, _event: tk.Event[tk.Misc]) -> None:
+        if self._focus_timer is not None:
+            self.after_cancel(self._focus_timer)
+            self._focus_timer = None
+        self._animate_focus()
+
+    def _animate_focus(self) -> None:
+        self._focus_timer = None
+        target = 4 if self.focus_get() is self else 0
+        if self._focus_step == target:
+            return
+        self._focus_step += 1 if self._focus_step < target else -1
+        self.configure(style=("Vehicle.TEntry" if self._focus_step == 0 else
+                              f"VehicleFocus{self._focus_step}.TEntry"))
+        if self._focus_step != target:
+            self._focus_timer = self.after(25, self._animate_focus)
+
+    def _cancel_focus_timer(self, _event: tk.Event[tk.Misc]) -> None:
+        if self._focus_timer is not None:
+            self.after_cancel(self._focus_timer)
+            self._focus_timer = None
 
 
 class ModernButton(tk.Canvas):

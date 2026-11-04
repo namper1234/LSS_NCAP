@@ -14,7 +14,6 @@ from .scenarios.elk import (ElkParameters, ElkPath, ElkScenario, LaneChangeInten
                             TargetMotion, elk_definition)
 from .scenarios.encounter import NominalEncounter, synchronize_encounter
 from .steering import PurePursuitController
-from .targets import target_type
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,70 +191,9 @@ class SimulationRun:
             self.samples[index], self.vehicle, self.lane_marker_inner_y_m, self.path.side)
 
     def rows(self) -> list[dict[str, float | str]]:
-        rows = [sample.as_row() for sample in self.samples]
-        for index, row in enumerate(rows):
-            row["vut_lane_marker_clearance_m"] = self.lane_marker_clearance_m(index)
-        profile = (target_type(self.elk_parameters.gvt_type_key)
-                   if self.elk_parameters is not None
-                   and self.elk_parameters.gvt_type_key is not None else None)
-        if self.target_samples:
-            for row, target in zip(rows, self.target_samples):
-                row.update({
-                    "target_x_m": target.x_m,
-                    "target_y_m": target.y_m,
-                    "target_yaw_deg": target.yaw_deg,
-                    "target_speed_mps": target.speed_mps,
-                })
-                if self.elk_parameters is not None:
-                    row.update({
-                        "target_overlap_percent": (self.elk_parameters.overlap_percent
-                                                   if self.scenario_key == "oncoming" else ""),
-                        "gvt_marker_distance_m": self.elk_parameters.gvt_marker_distance_m,
-                        "gvt_width_m": self.elk_parameters.gvt_width_m,
-                        "gvt_length_m": self.elk_parameters.gvt_length_m,
-                        "gvt_type": self.elk_parameters.gvt_type_key or "custom",
-                        "gvt_wheelbase_m": self.elk_parameters.resolved_gvt_wheelbase_m
-                        if self.elk_parameters.resolved_gvt_wheelbase_m is not None else "",
-                        "gvt_length_source": (
-                            "custom" if profile is None else
-                            profile.length_source(self.elk_parameters.gvt_length_m)),
-                        "gvt_length_wheel_diameter_m": (
-                            profile.length_wheel_diameter_m
-                            if profile is not None and profile.length_wheel_diameter_m is not None
-                            else ""),
-                        "gvt_dimension_source": profile.source_url if profile is not None else "",
-                        "intervention_active": row["steering_source"] == "lane_support",
-                        "trajectory_kind": ("elk_controlled" if self.elk_intervention_time_s is not None
-                                            else "no_intervention"),
-                        "no_intervention_collision_time_s": self.predicted_collision_time_s,
-                        "actual_collision_time_s": self.collision_time_s,
-                        "first_contact_x_m": (self.collision_point_m[0]
-                                             if self.collision_point_m is not None else ""),
-                        "first_contact_y_m": (self.collision_point_m[1]
-                                             if self.collision_point_m is not None else ""),
-                    })
-                    if self.nominal_encounter is not None:
-                        row.update({
-                            "nominal_overlap_m": self.nominal_encounter.overlap_m,
-                            "nominal_vut_front_x_m": self.nominal_encounter.vut_front_x_m,
-                            "nominal_vut_front_y_m": self.nominal_encounter.vut_front_y_m,
-                            "nominal_vut_yaw_deg": math.degrees(self.nominal_encounter.vut_yaw_rad),
-                            "nominal_gvt_x_m": self.nominal_encounter.target_x_m,
-                            "nominal_vut_reference_x_m": self.nominal_encounter.vut_reference_x_m,
-                            "nominal_reference": "scheduled_path_no_intervention",
-                        })
-                if self.nominal_sync_time_s is not None:
-                    row.update({
-                        "nominal_sync_time_s": self.nominal_sync_time_s,
-                        "nominal_gvt_front_edge_x_m":
-                            self.nominal_gvt_front_edge_x_m,
-                        "nominal_vut_rear_axle_x_m":
-                            self.nominal_vut_rear_axle_x_m,
-                        "nominal_sync_error_m": self.nominal_sync_error_m,
-                        "first_polygon_collision_time_s":
-                            self.predicted_collision_time_s,
-                    })
-        return rows
+        from .export import _run_rows
+
+        return _run_rows(self)
 
 
 def road_lateral_speed_mps(yaw_deg: float, body_lateral_speed_mps: float,
@@ -549,17 +487,6 @@ class SimulationEngine:
                 plant.step_substep(command_sw / p.steer_ratio)
             applied_sw_rad = command_sw
         return SimulationRun(path, tuple(samples), config, p, road=self.road)
-
-    def _distance_at_lateral_position(self, path: ReferencePath,
-                                      lateral_y_m: float) -> float:
-        """Nominal path distance at a requested signed lateral position."""
-        lateral = path.side * lateral_y_m
-        if lateral < 0:
-            return 0.0
-        if lateral <= path.arc_y:
-            ratio = max(-1.0, min(1.0, 1.0 - lateral / path.radius_m))
-            return path.s0 + path.radius_m * math.acos(ratio)
-        return path.s1 + (lateral - path.arc_y) / math.sin(math.radians(path.psi_deg))
 
     def _target_encounter(self, path: ReferencePath, motion: TargetMotion,
                           baseline: SimulationRun | None = None

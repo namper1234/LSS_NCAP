@@ -5,6 +5,8 @@ import tkinter as tk
 from collections.abc import Callable, Mapping
 from tkinter import ttk
 
+from .widgets import NumericEntry
+
 
 class VehicleParametersPanel(ttk.Frame):
     """One aligned parameter area with consistent units and edit behavior."""
@@ -46,8 +48,7 @@ class VehicleParametersPanel(ttk.Frame):
         value = ttk.Frame(cell, style="VehicleInput.TFrame")
         value.pack(fill="x")
         self._field_widgets.append((field_label, value))
-        entry = ttk.Entry(value, textvariable=self._variables[key],
-                          style="Vehicle.TEntry", width=8)
+        entry = NumericEntry(value, textvariable=self._variables[key], width=8)
         entry.pack(side="left", fill="x", expand=True)
         ttk.Label(value, text=unit, style="VehicleUnit.TLabel").pack(
             side="right", padx=(5, 8))

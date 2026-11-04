@@ -2,10 +2,25 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass, fields, replace
 
 from .config import VehicleParams
 from .simulation import SimulationSample, TargetVehicleSample
+
+Polygon = tuple[tuple[float, float], ...]
+
+
+def _separating_axes(
+        first: Polygon, second: Polygon) -> Iterator[tuple[float, float]]:
+    """Yield the two distinct edge normals from each rectangular footprint."""
+    for polygon in (first, second):
+        for index in range(2):
+            x1, y1 = polygon[index]
+            x2, y2 = polygon[index + 1]
+            axis_x, axis_y = -(y2 - y1), x2 - x1
+            magnitude = math.hypot(axis_x, axis_y)
+            yield axis_x / magnitude, axis_y / magnitude
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,29 +93,23 @@ def time_to_collision_s(ego: SimulationSample, target: TargetVehicleSample,
         target.speed_mps * math.sin(target_yaw) - ego_speed_mps * math.sin(ego_yaw),
     )
     entry, exit_time = -math.inf, math.inf
-    for polygon in (first, second):
-        for index in range(2):
-            x1, y1 = polygon[index]
-            x2, y2 = polygon[index + 1]
-            axis_x, axis_y = -(y2 - y1), x2 - x1
-            magnitude = math.hypot(axis_x, axis_y)
-            axis_x, axis_y = axis_x / magnitude, axis_y / magnitude
-            first_projection = [x * axis_x + y * axis_y for x, y in first]
-            second_projection = [x * axis_x + y * axis_y for x, y in second]
-            first_min, first_max = min(first_projection), max(first_projection)
-            second_min, second_max = min(second_projection), max(second_projection)
-            relative_speed = (relative_velocity[0] * axis_x
-                              + relative_velocity[1] * axis_y)
-            if abs(relative_speed) < 1e-12:
-                if second_max < first_min or first_max < second_min:
-                    return None
-                continue
-            first_time = (first_min - second_max) / relative_speed
-            second_time = (first_max - second_min) / relative_speed
-            axis_entry, axis_exit = sorted((first_time, second_time))
-            entry, exit_time = max(entry, axis_entry), min(exit_time, axis_exit)
-            if entry > exit_time:
+    for axis_x, axis_y in _separating_axes(first, second):
+        first_projection = [x * axis_x + y * axis_y for x, y in first]
+        second_projection = [x * axis_x + y * axis_y for x, y in second]
+        first_min, first_max = min(first_projection), max(first_projection)
+        second_min, second_max = min(second_projection), max(second_projection)
+        relative_speed = (relative_velocity[0] * axis_x
+                          + relative_velocity[1] * axis_y)
+        if abs(relative_speed) < 1e-12:
+            if second_max < first_min or first_max < second_min:
                 return None
+            continue
+        first_time = (first_min - second_max) / relative_speed
+        second_time = (first_max - second_min) / relative_speed
+        axis_entry, axis_exit = sorted((first_time, second_time))
+        entry, exit_time = max(entry, axis_entry), min(exit_time, axis_exit)
+        if entry > exit_time:
+            return None
     if exit_time < 0:
         return None
     return max(0.0, entry)
@@ -117,18 +126,11 @@ def polygon_separation_m(first: tuple[tuple[float, float], ...],
                          second: tuple[tuple[float, float], ...]) -> float:
     """Largest SAT gap, a conservative lower bound on polygon distance."""
     separation = 0.0
-    for polygon in (first, second):
-        for index in range(2):
-            x1, y1 = polygon[index]
-            x2, y2 = polygon[index + 1]
-            edge_x, edge_y = x2 - x1, y2 - y1
-            axis_x, axis_y = -edge_y, edge_x
-            magnitude = math.hypot(axis_x, axis_y)
-            axis_x, axis_y = axis_x / magnitude, axis_y / magnitude
-            projection_a = [x * axis_x + y * axis_y for x, y in first]
-            projection_b = [x * axis_x + y * axis_y for x, y in second]
-            separation = max(separation, min(projection_b) - max(projection_a),
-                             min(projection_a) - max(projection_b))
+    for axis_x, axis_y in _separating_axes(first, second):
+        projection_a = [x * axis_x + y * axis_y for x, y in first]
+        projection_b = [x * axis_x + y * axis_y for x, y in second]
+        separation = max(separation, min(projection_b) - max(projection_a),
+                         min(projection_a) - max(projection_b))
     return separation
 
 

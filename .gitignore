@@ -11,3 +11,4 @@ dist/
 .codex/
 .aws/
 tmp/
+.venv-web/

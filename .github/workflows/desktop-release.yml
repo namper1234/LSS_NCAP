@@ -20,7 +20,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux-release
-          path: dist/LSS_NCAP_Tool-linux-x86_64.zip
+          path: dist/LSS_NCAP_Tool-v*-linux-x86_64.zip
           if-no-files-found: error
 
   windows:
@@ -44,7 +44,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-release
-          path: dist/LSS_NCAP_Tool-windows-x86_64.zip
+          path: dist/LSS_NCAP_Tool-v*-windows-x86_64.zip
           if-no-files-found: error
 
   publish:
@@ -67,6 +67,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
-          release-assets/LSS_NCAP_Tool-linux-x86_64.zip
-          release-assets/LSS_NCAP_Tool-windows-x86_64.zip
+          release-assets/LSS_NCAP_Tool-v*-linux-x86_64.zip
+          release-assets/LSS_NCAP_Tool-v*-windows-x86_64.zip
           --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes

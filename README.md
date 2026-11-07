@@ -1,5 +1,7 @@
 # LSS Euro NCAP LKA and ELK simulation
 
+Current release: **2.0.0**.
+
 A deterministic Euro NCAP LSS v4.2 LKA/ELK path-following simulation with a
 two-lane Tkinter viewer. The simulator uses 25 ms controller/output samples and synchronized
 5 ms bicycle-model and position-integration substeps.
@@ -142,11 +144,12 @@ Motorcycle lengths remain editable for measured overrides, remembered separately
 for each motorcycle type during the viewer session. Clearing or entering an
 invalid length blocks generation, playback, and export with an explicit status
 message; previously generated plots remain visible as the **last valid run**.
-Car lengths and all catalogue widths are read-only.
+Car lengths remain read-only. GVT width and wheelbase are adjustable for every
+predefined and custom target; catalogue values remain the defaults.
 The controls consistently identify **GVT Length (m)**, **GVT Width (m)**, and
 **GVT Wheelbase (m)** separately from the VUT vehicle configuration. All six
-predefined wheelbases are populated from the catalogue and are read-only, including
-the motorcycle wheelbases.
+predefined wheelbases are populated from the catalogue and can be overridden
+for simulation.
 
 **Custom GVT** makes all three fields editable. Its initial dimensions come from
 the existing vehicle configuration defaults, not a manufacturer reference.
@@ -170,8 +173,9 @@ Headless runs select a predefined type or `custom` using `--gvt-type`. Motorcycl
 types use the same formula-derived default lengths without requiring `--gvt-length`;
 that option supplies a measured override. Fixed car dimensions cannot be
 overridden. Omitting `--gvt-type` preserves the custom numeric
-`--gvt-length`/`--gvt-width` API and CLI workflow. `--gvt-wheelbase` sets the optional
-custom wheelbase (or confirms a matching predefined wheelbase). Launching the GUI
+`--gvt-length`/`--gvt-width` API and CLI workflow. `--gvt-width` and
+`--gvt-wheelbase` override the catalogue defaults for predefined targets as well.
+Launching the GUI
 with numeric dimensions and no named type selects Custom GVT. For Python callers:
 
 ```python

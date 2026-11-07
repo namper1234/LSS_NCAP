@@ -43,9 +43,12 @@ class TargetTypeTests(unittest.TestCase):
                 CUSTOM_TARGET_TYPE.dimensions(invalid, width_m=1.7)
         for target in TARGET_TYPES:
             length, width = target.dimensions(1.95 if target.length_m is None else None)
-            with self.assertRaisesRegex(ValueError, "wheelbase is fixed"):
-                ElkParameters(gvt_type_key=target.key, gvt_length_m=length,
-                              gvt_width_m=width, gvt_wheelbase_m=target.wheelbase_m + 0.01)
+            parameters = ElkParameters(
+                gvt_type_key=target.key, gvt_length_m=length,
+                gvt_width_m=width + 0.1, gvt_wheelbase_m=target.wheelbase_m + 0.01)
+            self.assertEqual(parameters.gvt_width_m, width + 0.1)
+            self.assertEqual(parameters.resolved_gvt_wheelbase_m,
+                             target.wheelbase_m + 0.01)
         for scenario in ("oncoming", "overtaking"):
             parameters = ElkParameters(
                 gvt_type_key="custom", gvt_length_m=3.8, gvt_width_m=1.7,
@@ -128,9 +131,9 @@ class TargetTypeTests(unittest.TestCase):
         for target in TARGET_TYPES[3:]:
             with self.assertRaisesRegex(ValueError, "fixed"):
                 target.dimensions(9)
-            with self.assertRaises(ValueError):
-                ElkParameters(gvt_type_key=target.key, gvt_length_m=target.length_m,
-                              gvt_width_m=2)
+            parameters = ElkParameters(gvt_type_key=target.key,
+                                       gvt_length_m=target.length_m, gvt_width_m=2)
+            self.assertEqual(parameters.gvt_width_m, 2)
 
     def test_every_target_drives_encounter_polygons_and_first_collision(self) -> None:
         initial_positions: dict[str, set[tuple[float, float]]] = {
@@ -235,6 +238,15 @@ class TargetTypeTests(unittest.TestCase):
             self.assertEqual(row["gvt_length_source"], "manufacturer")
             self.assertEqual(row["gvt_length_wheel_diameter_m"], "")
 
+            with patch("builtins.print"):
+                self.assertEqual(main(command[:-4] + [
+                    "--gvt-type", "c2_suv", "--gvt-width", "1.95",
+                    "--gvt-wheelbase", "2.75", "--output", str(output)]), 0)
+            with output.open(newline="") as stream:
+                row = next(csv.DictReader(stream))
+            self.assertEqual(float(row["gvt_width_m"]), 1.95)
+            self.assertEqual(float(row["gvt_wheelbase_m"]), 2.75)
+
 
 class TargetSelectorTests(unittest.TestCase):
     def test_custom_selector_edits_update_geometry_and_preserve_dimensions(self) -> None:
@@ -276,12 +288,21 @@ class TargetSelectorTests(unittest.TestCase):
                 self.assertEqual(draw.call_args.kwargs["width_m"], 1.7)
             app.gvt_type_var.set("4activeMC-AMT")
             self.assertEqual(float(app.gvt_wheelbase_var.get()), 1.255)
-            self.assertEqual(str(app.gvt_wheelbase_entry["state"]), "readonly")
+            self.assertEqual(str(app.gvt_width_entry["state"]), "normal")
+            self.assertEqual(str(app.gvt_wheelbase_entry["state"]), "normal")
             self.assertEqual(float(app.gvt_length_var.get()), 1.5215)
             app.gvt_type_var.set("4activeC2-SUV")
             self.assertEqual(float(app.gvt_length_var.get()), 4.35)
             self.assertEqual(float(app.gvt_width_var.get()), 1.805)
             self.assertEqual(float(app.gvt_wheelbase_var.get()), 2.6)
+            self.assertEqual(str(app.gvt_width_entry["state"]), "normal")
+            self.assertEqual(str(app.gvt_wheelbase_entry["state"]), "normal")
+            app.gvt_width_var.set("1.95")
+            app.gvt_wheelbase_var.set("2.75")
+            app.regenerate(show_errors=False)
+            self.assertIsNone(app._generation_error)
+            self.assertEqual(app.run_data.target_vehicle.body_width_m, 1.95)
+            self.assertEqual(app.run_data.target_vehicle.wheelbase_m, 2.75)
             app.gvt_type_var.set("Custom GVT")
             self.assertEqual((app.gvt_length_var.get(), app.gvt_width_var.get(),
                               app.gvt_wheelbase_var.get()), ("3.8", "1.7", "2.4"))
@@ -334,7 +355,7 @@ class TargetSelectorTests(unittest.TestCase):
             app = SimulationApp(root=root)
             self.assertEqual(app.gvt_type_var.get(), DEFAULT_TARGET_TYPE.name)
             self.assertEqual(float(app.gvt_length_var.get()), 1.410)
-            self.assertEqual(str(app.gvt_width_entry["state"]), "readonly")
+            self.assertEqual(str(app.gvt_width_entry["state"]), "normal")
             self.assertEqual(len(app.gvt_type_combo.images), 7)
             self.assertEqual(app.gvt_type_combo.values,
                              tuple(target.name for target in GVT_TYPES))
@@ -380,7 +401,8 @@ class TargetSelectorTests(unittest.TestCase):
                 self.assertAlmostEqual(app.run_data.target_vehicle.body_length_m, expected_length)
                 self.assertEqual(float(app.gvt_wheelbase_var.get()), target.wheelbase_m)
                 self.assertEqual(app.run_data.target_vehicle.wheelbase_m, target.wheelbase_m)
-                self.assertEqual(str(app.gvt_wheelbase_entry["state"]), "readonly")
+                self.assertEqual(str(app.gvt_width_entry["state"]), "normal")
+                self.assertEqual(str(app.gvt_wheelbase_entry["state"]), "normal")
                 self.assertEqual(str(app.gvt_length_entry["state"]),
                                  "normal" if target.length_m is None else "readonly")
                 self.assertEqual(app.run_data.elk_parameters.overlap_percent, 10)

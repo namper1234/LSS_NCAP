@@ -63,8 +63,13 @@ fi
 "$gh_bin" run watch "$run_id" -R "$repo" --exit-status
 artifact_dir="$root/dist/windows-ci-$run_id"
 "$gh_bin" run download "$run_id" -R "$repo" -n windows-release -D "$artifact_dir"
-archive="$artifact_dir/LSS_NCAP_Tool-windows-x86_64.zip"
-python3 - "$archive" "$root/dist/LSS_NCAP_Tool-windows-x86_64.zip" <<'PY'
+archives=("$artifact_dir"/LSS_NCAP_Tool-v*-windows-x86_64.zip)
+if [[ ! -f "${archives[0]}" || "${#archives[@]}" -ne 1 ]]; then
+    echo "Expected one versioned Windows ZIP in $artifact_dir." >&2
+    exit 1
+fi
+archive="${archives[0]}"
+python3 - "$archive" "$root/dist/$(basename "$archive")" <<'PY'
 import shutil
 import sys
 import zipfile

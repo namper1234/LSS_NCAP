@@ -216,10 +216,8 @@ class SimulationApp:
             self.traffic_settings, "GVT Length (m)", self.gvt_length_var, stacked=True)
         self.gvt_width_entry = self._numeric_entry(
             self.traffic_settings, "GVT Width (m)", self.gvt_width_var, stacked=True)
-        self.gvt_width_entry.configure(state="readonly")
         self.gvt_wheelbase_entry = self._numeric_entry(
             self.traffic_settings, "GVT Wheelbase (m)", self.gvt_wheelbase_var, stacked=True)
-        self.gvt_wheelbase_entry.configure(state="readonly")
         self.line_combo = self._combo(settings_third, "Lane line", self.line_var,
                                       ("Dashed", "Solid"), 7)
         self.d2_entry = self._numeric_entry(
@@ -546,8 +544,10 @@ class SimulationApp:
         length_value = self.gvt_length_var.get().strip()
         if not length_value:
             raise ValueError("GVT Length (m) is required")
-        length, width = target.dimensions(
-            float(length_value), width_m=float(self.gvt_width_var.get()))
+        width_value = float(self.gvt_width_var.get())
+        length, catalogue_width = target.dimensions(
+            float(length_value), width_m=width_value if target.is_custom else None)
+        width = width_value if not target.is_custom else catalogue_width
         wheelbase_value = self.gvt_wheelbase_var.get().strip()
         return replace(
             parameters, gvt_speed_kph=float(self.gvt_speed_kph_var.get()),
@@ -587,8 +587,8 @@ class SimulationApp:
         self.gvt_wheelbase_var.set(wheelbase)
         self.gvt_length_entry.configure(
             state="normal" if target.is_custom or target.length_m is None else "readonly")
-        self.gvt_width_entry.configure(state="normal" if target.is_custom else "readonly")
-        self.gvt_wheelbase_entry.configure(state="normal" if target.is_custom else "readonly")
+        self.gvt_width_entry.configure(state="normal")
+        self.gvt_wheelbase_entry.configure(state="normal")
         self._schedule_regeneration()
 
     def _vehicle_configuration(self) -> VehicleConfiguration:

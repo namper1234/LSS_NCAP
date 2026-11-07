@@ -19,10 +19,11 @@ if ($LASTEXITCODE -ne 0) { throw "Unit tests failed" }
 
 & $BuildPython -m PyInstaller --noconfirm --clean --distpath dist --workpath build/pyinstaller LSS_NCAP_Tool.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-& $BuildPython packaging/zip_release.py --platform windows
+$ArchiveOutput = & $BuildPython packaging/zip_release.py --platform windows
 if ($LASTEXITCODE -ne 0) { throw "ZIP packaging failed" }
-& $BuildPython packaging/smoke_release.py dist/LSS_NCAP_Tool-windows-x86_64.zip --gui
+$Archive = $ArchiveOutput[-1]
+& $BuildPython packaging/smoke_release.py $Archive --gui
 if ($LASTEXITCODE -ne 0) { throw "Release smoke checks failed" }
 
 Write-Host "Windows executable: $(Join-Path (Get-Location) 'dist\LSS_NCAP_Tool\LSS_NCAP_Tool.exe')"
-Write-Host "Portable ZIP: $(Join-Path (Get-Location) 'dist\LSS_NCAP_Tool-windows-x86_64.zip')"
+Write-Host "Portable ZIP: $Archive"

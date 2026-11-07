@@ -40,4 +40,4 @@ else
 fi
 
 PYTHON="$BUILD_PYTHON" bash packaging/build_linux.sh
-echo "Ubuntu release: $(pwd)/dist/LSS_NCAP_Tool-linux-x86_64.zip"
+echo "Ubuntu release files: $(pwd)/dist/LSS_NCAP_Tool-v*-linux-x86_64.zip"

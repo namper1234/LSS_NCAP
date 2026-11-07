@@ -49,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gvt-length", type=float, default=None)
     parser.add_argument("--gvt-width", type=float, default=None)
     parser.add_argument("--gvt-wheelbase", type=float, default=None,
-                        help="GVT wheelbase in metres; catalogue values are fixed")
+                        help="GVT wheelbase in metres; catalogue value is the default")
     parser.add_argument("--elk-protocol-tables", action="store_true",
                         help="headless legacy ELK table/synchronization compatibility")
     parser.add_argument("--headless", action="store_true", help="Generate CSV without a GUI")
@@ -73,9 +73,10 @@ def _elk_parameters(args: argparse.Namespace,
                     else args.gvt_width)
     if args.gvt_type is not None:
         target = target_type(args.gvt_type)
-        target_length, target_width = target.dimensions(
+        target_length, catalogue_width = target.dimensions(
             target_length if target.is_custom else args.gvt_length,
-            width_m=target_width if target.is_custom else args.gvt_width)
+            width_m=target_width if target.is_custom else None)
+        target_width = catalogue_width if args.gvt_width is None else args.gvt_width
     return ElkParameters(
         radius_m=config.path_radius_m if args.radius is None else args.radius,
         d2_m=config.lka_d2_m if args.d2 is None else args.d2,

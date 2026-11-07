@@ -1,4 +1,5 @@
 """Euro NCAP lane-departure simulation and viewer."""
+__version__ = "2.0.0"
 from .config import (NCAP_ALTERNATIVE_DIM, NCAP_ALTERNATIVE_DIM_TABLE,
                      NCAP_PATH, NCAP_STANDARD, NCAP_STANDARD_TABLE, ROAD,
                      SIMULATION, VEHICLE, RoadConfig, SimulationConfig,
@@ -15,6 +16,7 @@ from .targets import (CUSTOM_TARGET_TYPE, DEFAULT_TARGET_TYPE, GVT_TYPES,
                       TARGET_TYPES, TargetType, target_type)
 
 __all__ = [
+    "__version__",
     "NCAP_PATH", "NCAP_STANDARD", "NCAP_ALTERNATIVE_DIM",
     "NCAP_STANDARD_TABLE", "NCAP_ALTERNATIVE_DIM_TABLE",
     "ROAD", "SIMULATION", "VEHICLE", "RoadConfig",

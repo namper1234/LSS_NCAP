@@ -5,6 +5,8 @@ import argparse
 import zipfile
 from pathlib import Path
 
+from lss_ncap import __version__
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -16,7 +18,7 @@ def main() -> None:
                            else "LSS_NCAP_Tool")
     if not executable.is_file():
         parser.error(f"missing build: {executable}")
-    archive = root / "dist" / f"LSS_NCAP_Tool-{args.platform}-x86_64.zip"
+    archive = root / "dist" / f"LSS_NCAP_Tool-v{__version__}-{args.platform}-x86_64.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED,
                          compresslevel=6) as output:
         for path in sorted(bundle.rglob("*")):

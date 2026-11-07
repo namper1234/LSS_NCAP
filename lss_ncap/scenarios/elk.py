@@ -84,12 +84,16 @@ class ElkParameters:
             raise ValueError("Target overlap must be between 0 and 100 percent of VUT width")
         if self.gvt_type_key is not None:
             target = target_type(self.gvt_type_key)
-            length, width = target.dimensions(self.gvt_length_m, width_m=self.gvt_width_m)
-            if not math.isclose(self.gvt_width_m, width) or not math.isclose(self.gvt_length_m, length):
-                raise ValueError(f"{target.name} requires its catalogue length and width")
-            if (not target.is_custom and self.gvt_wheelbase_m is not None
-                    and not math.isclose(self.gvt_wheelbase_m, target.wheelbase_m)):
-                raise ValueError(f"{target.name} wheelbase is fixed at {target.wheelbase_m:g} m")
+            if target.is_custom:
+                length, _ = target.dimensions(
+                    self.gvt_length_m, width_m=self.gvt_width_m)
+            else:
+                # Width and wheelbase are adjustable simulation inputs.  A
+                # named target still supplies their defaults and retains its
+                # catalogue/confirmed overall-length rules.
+                length, _ = target.dimensions(self.gvt_length_m)
+            if not math.isclose(self.gvt_length_m, length):
+                raise ValueError(f"{target.name} requires its catalogue length")
         wheelbase = self.resolved_gvt_wheelbase_m
         if wheelbase is not None and (
                 not math.isfinite(wheelbase) or not 0 < wheelbase < self.gvt_length_m):

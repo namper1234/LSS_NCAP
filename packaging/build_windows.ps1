@@ -19,7 +19,7 @@ if ($LASTEXITCODE -ne 0) { throw "Unit tests failed" }
 
 & $BuildPython -m PyInstaller --noconfirm --clean --distpath dist --workpath build/pyinstaller LSS_NCAP_Tool.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-$ArchiveOutput = & $BuildPython packaging/zip_release.py --platform windows
+$ArchiveOutput = @(& $BuildPython packaging/zip_release.py --platform windows)
 if ($LASTEXITCODE -ne 0) { throw "ZIP packaging failed" }
 $Archive = $ArchiveOutput[-1]
 & $BuildPython packaging/smoke_release.py $Archive --gui

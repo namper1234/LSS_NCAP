@@ -79,16 +79,16 @@ after both native build and smoke jobs pass.
 ## Run
 
 ```bash
-python3 lka_ncap_profile.py
-python3 lka_ncap_profile.py --headless --vlat 0.4 --side left --output profile.csv
-python3 lka_ncap_profile.py --headless --vlat 0.47 --d2 1.3 --radius 725 --output custom_lka.csv
-python3 lka_ncap_profile.py --headless --ncap-profile alternative_dim --vlat 0.8 --side right --output alternative.csv
-python3 lka_ncap_profile.py --headless --vlat 0.4 --swa-only --output swa_profile.csv
-python3 lka_ncap_profile.py --headless --mode elk --elk-scenario oncoming --vlat 0.4 --output elk_oncoming.csv
-python3 lka_ncap_profile.py --headless --mode elk --elk-scenario overtaking --intent intentional --target-speed 80 --vlat 0.6 --output elk_overtaking.csv
-python3 lka_ncap_profile.py --headless --mode elk --elk-scenario oncoming --vlat 0.53 --d2 0.37 --radius 675 --vut-speed 65 --target-speed 89 --gvt-marker-distance 1.7 --overlap 25 --gvt-length 4.2 --gvt-width 1.85 --output elk_custom.csv
-python3 lka_ncap_profile.py --headless --mode elk --elk-scenario oncoming --gvt-type c2_suv --output elk_suv.csv
-python3 lka_ncap_profile.py --headless --mode elk --elk-scenario oncoming --gvt-type custom --gvt-length 3.8 --gvt-width 1.7 --gvt-wheelbase 2.4 --output elk_custom_gvt.csv
+python3 main.py
+python3 main.py --headless --vlat 0.4 --side left --output profile.csv
+python3 main.py --headless --vlat 0.47 --d2 1.3 --radius 725 --output custom_lka.csv
+python3 main.py --headless --ncap-profile alternative_dim --vlat 0.8 --side right --output alternative.csv
+python3 main.py --headless --vlat 0.4 --swa-only --output swa_profile.csv
+python3 main.py --headless --mode elk --elk-scenario oncoming --vlat 0.4 --output elk_oncoming.csv
+python3 main.py --headless --mode elk --elk-scenario overtaking --intent intentional --target-speed 80 --vlat 0.6 --output elk_overtaking.csv
+python3 main.py --headless --mode elk --elk-scenario oncoming --vlat 0.53 --d2 0.37 --radius 675 --vut-speed 65 --target-speed 89 --gvt-marker-distance 1.7 --overlap 25 --gvt-length 4.2 --gvt-width 1.85 --output elk_custom.csv
+python3 main.py --headless --mode elk --elk-scenario oncoming --gvt-type c2_suv --output elk_suv.csv
+python3 main.py --headless --mode elk --elk-scenario oncoming --gvt-type custom --gvt-length 3.8 --gvt-width 1.7 --gvt-wheelbase 2.4 --output elk_custom_gvt.csv
 python3 -m unittest discover -s tests -v
 ```
 
@@ -364,7 +364,7 @@ The nominal alignment time and actual first polygon-contact time are separately
 calculated: Pure Pursuit tracking error or an external ELK controller can change
 the actual event without changing reference geometry. For the default 72/72 km/h,
 0.4 m/s, 1200 m radius, 1.5 m GVT offset, and 4.957 x 2.013 m vehicles with a
-2.95 m VUT wheelbase (default d2 = 1 m and approach = 5 s), overtaking's nominal
+2.95 m VUT wheelbase (automatically centred d2 and approach = 5 s), overtaking's nominal
 encounter is 9.830827 s and actual contact is approximately 9.830864 s.
 At 72/80 km/h, actual contact is approximately 9.830860 s. Nominal leading-edge/
 rear-axle synchronization error is zero to numerical precision in both cases.
@@ -428,8 +428,9 @@ rendering and collision geometry. Vehicle mass remains internal at 2485 kg by
 default; the kinematic bicycle equations do not depend on it.
 LKA geometry is configurable, not selected from a baseline test case. **R (m)**
 is the circular reference arc's radius; **d2 (m)** is the additional lateral
-distance along the straight departure after that arc. The initial editable
-defaults are R = 1200 m and d2 = 1 m. Radius must be finite and positive;
+distance along the straight departure after that arc. The default radius is
+1200 m; d2 is calculated so the VUT is centred in the configured lane, with a
+1.0 m fallback when that calculation is not possible. Radius must be finite and positive;
 d2 must be finite and nonnegative (zero omits the tangent before the configured
 departure tail). LKA accepts any finite lateral-speed target strictly between
 zero and the configured vehicle speed, not just protocol table speeds.
@@ -442,6 +443,7 @@ d1 = R * (1 - cos(psi))
 arc length = R * psi
 tangent length = d2 / sin(psi)
 lane-marker offset = d1 + d2
+automatic d2 = (lane width - VUT width) / 2 - d1
 ```
 
 The departure side mirrors the geometry without changing these distances.
@@ -454,8 +456,7 @@ cannot be combined with geometry overrides; configurable ELK retains protocol
 departure-side conventions. The Python `SimulationEngine.run_lka` and compatibility `generate`
 functions accept keyword arguments `radius_m` and `d2_m`.
 The checked-in `lka_profile.csv` uses the configurable defaults (vlat = 0.4 m/s,
-R = 1200 m, d2 = 1 m). It contains 410 samples; the exact derived yaw and
-longer departure replace the former rounded table yaw and d2 = 0.8 m profile.
+R = 1200 m, automatically calculated d2 = 0.503476 m). It contains 360 samples.
 Changing these settings updates the road view and all three plots. Internally,
 the controller uses `max(minimum distance, speed * look-ahead time)` with fixed
 viewer defaults of 8 m and 0.5 s (10 m at 72 km/h).
@@ -514,7 +515,7 @@ not show look-ahead settings, tuning results, or target annotations.
 | `lss_ncap/export.py` | CSV serialization |
 | `lss_ncap/visualization/` | Road projection, vehicle geometry, and charts |
 | `lss_ncap/ui/` | Tk application, theme, and playback state |
-| `lka_ncap_profile.py` | Original CLI and import compatibility entry point |
+| `main.py` | CLI and import compatibility entry point |
 
 The simulator generates the NCAP approach path and steering profile. A
 production lane-support controller can still be connected through

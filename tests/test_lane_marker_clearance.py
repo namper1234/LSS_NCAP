@@ -87,9 +87,11 @@ class LaneMarkerViewerTests(unittest.TestCase):
                 items = app.road_canvas.find_withtag("lane-marker-clearance")
                 self.assertEqual(len(items), 0)
             previous = app.run_data.initial_lane_marker_distance_m
+            previous_d2 = app.run_data.path.d2
             app.d2_var.set("1.7")
             app.regenerate(show_errors=False)
-            self.assertAlmostEqual(app.run_data.initial_lane_marker_distance_m, previous + 0.7)
+            self.assertAlmostEqual(app.run_data.initial_lane_marker_distance_m,
+                                   previous + 1.7 - previous_d2)
             root.update()
             label = f"d = d1 + d2 + VUT width/2: {app.run_data.initial_lane_marker_distance_m:.3f} m"
             self.assertIn(label, app.telemetry_state_var.get())

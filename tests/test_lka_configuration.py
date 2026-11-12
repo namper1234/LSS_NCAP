@@ -10,12 +10,12 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from lka_ncap_profile import generate
+from main import generate
 from lss_ncap.cli import main
 from lss_ncap.config import NCAP_STANDARD, SimulationConfig, VehicleParams
 from lss_ncap.lookahead_tuning import TuningRequest
 from lss_ncap.scenarios.lka import NcapPath
-from lss_ncap.simulation import SimulationEngine
+from lss_ncap.simulation import SimulationEngine, lane_center_d2_m
 from lss_ncap.ui.app import SimulationApp
 
 
@@ -49,7 +49,9 @@ class ConfigurableLkaTests(unittest.TestCase):
     def test_config_defaults_and_request_preserve_geometry(self) -> None:
         config = SimulationConfig(path_radius_m=930.0, lka_d2_m=0.45)
         default = SimulationEngine(config).run_lka(0.47)
-        self.assertEqual((default.path.radius_m, default.path.d2), (930.0, 0.45))
+        self.assertEqual(default.path.radius_m, 930.0)
+        self.assertAlmostEqual(default.path.d2, lane_center_d2_m(
+            0.47, 930.0, config.speed_mps, 3.5, VehicleParams().body_width_m))
         request = TuningRequest(config, VehicleParams(), "LKA", 0.47, -1,
                                 radius_m=555.0, d2_m=1.35)
         run = request.run(0.7)
@@ -123,6 +125,7 @@ class ConfigurableLkaTests(unittest.TestCase):
                             [s.v_lat_mps for s in altered_controller.samples])
 
     def test_invalid_inputs_are_rejected_without_table_fallback(self) -> None:
+        self.assertEqual(lane_center_d2_m(20, 1200, 20, 3.5, 2.013), 1.0)
         for value in (0, -1, math.nan, math.inf):
             with self.subTest(radius=value), self.assertRaises(ValueError):
                 NcapPath(0.43, 1, radius_m=value)
@@ -243,5 +246,5 @@ class ConfigurableLkaViewerTests(unittest.TestCase):
         app.mode_var.set("LKA")
         app._scenario_selection_changed()
         self.assertEqual(app.run_data.path.radius_m, 915)
-        self.assertEqual(app.run_data.path.d2, 1)
+        self.assertEqual(app.run_data.path.d2, float(app.d2_var.get()))
         self.assertEqual(app.run_data.config.speed_mps, 15)

@@ -27,7 +27,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         default=None,
                         help="legacy headless LKA table: standard or alternative_dim")
     parser.add_argument("--d2", type=float, default=None,
-                        help="tangent lateral distance in metres (default 1)")
+                        help="tangent lateral distance in metres (default: lane-centred)")
     parser.add_argument("--radius", type=float, default=None,
                         help="reference arc radius in metres (default 1200)")
     parser.add_argument("--side", choices=("left", "right"), default=None,
@@ -53,7 +53,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--elk-protocol-tables", action="store_true",
                         help="headless legacy ELK table/synchronization compatibility")
     parser.add_argument("--headless", action="store_true", help="Generate CSV without a GUI")
-    parser.add_argument("--output", type=Path, default=Path("lka_ncap_profile.csv"))
+    parser.add_argument("--output", type=Path, default=Path("lss_ncap_profile.csv"))
     parser.add_argument("--swa-only", action="store_true",
                         help="export time and steering-wheel command for external replay")
     parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"),
@@ -79,7 +79,7 @@ def _elk_parameters(args: argparse.Namespace,
         target_width = catalogue_width if args.gvt_width is None else args.gvt_width
     return ElkParameters(
         radius_m=config.path_radius_m if args.radius is None else args.radius,
-        d2_m=config.lka_d2_m if args.d2 is None else args.d2,
+        d2_m=args.d2,
         gvt_speed_kph=args.target_speed,
         gvt_marker_distance_m=args.gvt_marker_distance,
         overlap_percent=defaults.overlap_percent if args.overlap is None else args.overlap,

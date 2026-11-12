@@ -51,7 +51,8 @@ class PanelExpansionTests(unittest.TestCase):
             self.assertEqual(app.approach_s_var.get(), "5")
             self.assertEqual(app.run_data.config.approach_s, 5.0)
             self.assertFalse(hasattr(app, "profile_combo"))
-            self.assertEqual(app.d2_var.get(), "1")
+            self.assertAlmostEqual(float(app.d2_var.get()), app.run_data.path.d2,
+                                   places=6)
             self.assertEqual(app.run_data.path.radius_m, 1200.0)
             self.assertEqual(app.run_data.pursuit_controller.lookahead_m, 10.0)
             self.assertFalse(hasattr(app, "steering_info_label"))

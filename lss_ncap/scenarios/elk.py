@@ -63,7 +63,7 @@ class ElkParameters:
     """Exploratory ELK inputs; GVT offset is its centre to the marker inner edge."""
 
     radius_m: float = SIMULATION.path_radius_m
-    d2_m: float = SIMULATION.lka_d2_m
+    d2_m: float | None = None
     gvt_speed_kph: float = 72.0
     gvt_marker_distance_m: float = 1.5
     overlap_percent: float = 10.0
@@ -77,8 +77,10 @@ class ElkParameters:
                     self.gvt_length_m, self.gvt_width_m)
         if not all(math.isfinite(value) and value > 0 for value in positive):
             raise ValueError("ELK radius, GVT speed, length, and width must be finite and positive")
-        if not all(math.isfinite(value) and value >= 0
-                   for value in (self.d2_m, self.gvt_marker_distance_m)):
+        if ((self.d2_m is not None
+             and (not math.isfinite(self.d2_m) or self.d2_m < 0))
+                or not math.isfinite(self.gvt_marker_distance_m)
+                or self.gvt_marker_distance_m < 0):
             raise ValueError("ELK d2 and GVT marker distance must be finite and nonnegative")
         if not math.isfinite(self.overlap_percent) or not 0 <= self.overlap_percent <= 100:
             raise ValueError("Target overlap must be between 0 and 100 percent of VUT width")

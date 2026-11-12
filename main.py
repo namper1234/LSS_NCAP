@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Euro NCAP LKA steering profile and interactive two-lane viewer.
 
-Run ``python3 lka_ncap_profile.py`` for the GUI or add ``--headless`` for CSV.
+Run ``python3 main.py`` for the GUI or add ``--headless`` for CSV.
 The implementation lives in the :mod:`lss_ncap` package. This entry point
 keeps the original command line and commonly imported names available.
 """

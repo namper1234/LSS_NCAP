@@ -17,6 +17,14 @@ from lss_ncap.simulation import SimulationEngine, road_lateral_speed_mps
 
 
 class SimulationTests(unittest.TestCase):
+    def test_default_lka_and_elk_place_vut_at_lane_center(self) -> None:
+        engine = SimulationEngine()
+        runs = (engine.run_lka(), engine.run_elk("road_edge"))
+        for run in runs:
+            with self.subTest(mode=run.mode):
+                self.assertAlmostEqual(run.initial_lane_marker_distance_m,
+                                       run.road.default_lane_width_m / 2)
+
     def test_lka_protocol_tables_match_lss_v42_section_723(self) -> None:
         self.assertEqual(NCAP_STANDARD_TABLE, {
             0.2: (1200.0, 0.57, 0.06, 0.70),

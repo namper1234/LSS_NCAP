@@ -31,6 +31,22 @@ class VehicleState:
 # Zero is an explicit angle command; it is never used as a synonym for hands off.
 LaneSupportCommand = Callable[[VehicleState], float | None]
 
+DEFAULT_D2_M = 1.0
+
+
+def lane_center_d2_m(lateral_speed_mps: float, radius_m: float,
+                     speed_mps: float, lane_width_m: float,
+                     vehicle_width_m: float, *,
+                     default_m: float = DEFAULT_D2_M) -> float:
+    """Return the tangent offset that places the VUT in the lane centre."""
+    try:
+        psi = math.asin(lateral_speed_mps / speed_mps)
+        d1_m = radius_m * (1.0 - math.cos(psi))
+        d2_m = (lane_width_m - vehicle_width_m) / 2.0 - d1_m
+    except (TypeError, ValueError, ZeroDivisionError):
+        return default_m
+    return d2_m if math.isfinite(d2_m) and d2_m >= 0.0 else default_m
+
 
 @dataclass(frozen=True, slots=True)
 class TargetVehicleSample:
@@ -221,6 +237,11 @@ class SimulationEngine:
                 radius_m: float | None = None,
                 d2_m: float | None = None) -> SimulationRun:
         """Track configurable LKA geometry; explicit profiles select legacy tables."""
+        resolved_radius_m = self.config.path_radius_m if radius_m is None else radius_m
+        if d2_m is None and profile is None:
+            d2_m = lane_center_d2_m(
+                lateral_speed_mps, resolved_radius_m, self.config.speed_mps,
+                self.road.default_lane_width_m, self.vehicle.body_width_m)
         path = NcapPath(lateral_speed_mps, side, config=self.config,
                         profile=profile, radius_m=radius_m, d2_m=d2_m)
         run = self.run(path, lane_support=lane_support)
@@ -245,6 +266,10 @@ class SimulationEngine:
         intent = LaneChangeIntent(intent)
         definition = elk_definition(scenario, target_motion=target_motion, intent=intent)
         selected_side = definition.allowed_sides[0] if side is None else side
+        if parameters is not None and parameters.d2_m is None:
+            parameters = replace(parameters, d2_m=lane_center_d2_m(
+                lateral_speed_mps, parameters.radius_m, self.config.speed_mps,
+                self.road.default_lane_width_m, self.vehicle.body_width_m))
         path = ElkPath(lateral_speed_mps, selected_side, definition.scenario,
                        intent=intent, config=self.config, parameters=parameters)
         if safe_termination is None:
